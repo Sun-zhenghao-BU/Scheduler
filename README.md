@@ -1,14 +1,35 @@
 # Scheduler Automation Workflow
 
-This repository bootstraps a local automation workflow for software delivery.
-It models two roles:
+This repository bootstraps a local automation workflow for software delivery on top of `OpenSpec` and `Superpowers`.
+It models two primary roles:
 
 - `OpenSpec`: turns raw requests into implementation-ready specifications.
-- `Superpower`: executes implementation, self-review, bug fixing, release notes, and delivery tracking.
+- `Superpowers`: executes implementation, self-review, bug fixing, release notes, and delivery tracking.
 
 ## Current status
 
 The repository is intentionally lightweight and uses only the Python standard library.
+
+## Goal
+
+The target workflow is:
+
+1. You describe a requirement in natural language.
+2. `OpenSpec` converts it into a proposal, design, and executable task list.
+3. The implementation agent writes code against that spec.
+4. The agent runs local verification and performs self-review.
+5. The agent records bugs, fixes them, and updates logs.
+6. Everything is committed directly to `main` and pushed to GitHub.
+
+## Delivery plan
+
+This repository is being built in the following sequence:
+
+1. Set up a local task workflow and storage format.
+2. Add `OpenSpec` project configuration and Codex skill wiring.
+3. Add implementation, review, fix, and release tracking.
+4. Add GitHub CI for baseline verification on every push to `main`.
+5. Push the repository to GitHub and use it as the control plane for future automated changes.
 
 ## Workflow stages
 
@@ -18,6 +39,32 @@ The repository is intentionally lightweight and uses only the Python standard li
 4. `review`: self-review and code review findings.
 5. `fix`: record bug fixes and verification notes.
 6. `release`: prepare push/deploy notes and final checklist.
+
+## Working process
+
+The intended operating loop for this repository is:
+
+1. Create or refine a change in `OpenSpec`.
+2. Generate proposal, design, and task artifacts.
+3. Implement tasks through the local workflow CLI or agent-driven execution.
+4. Log verification results in the task journal.
+5. Record review findings and bug fixes.
+6. Commit all relevant changes.
+7. Push directly to `main`.
+8. Let GitHub Actions validate the repository.
+
+## OpenSpec and Superpowers
+
+This repository includes:
+
+- `openspec/config.yaml` for spec-driven change management.
+- `.codex/skills/openspec-*` skills for proposing, exploring, applying, and archiving changes.
+- local workflow files under `src/scheduler_automation/` for task state, logs, and summaries.
+
+The practical split is:
+
+- Use `OpenSpec` to define what should be built.
+- Use `Superpowers` and the local workflow engine to build it, review it, and close it out.
 
 ## Quick start
 
@@ -32,15 +79,36 @@ python -m scheduler_automation.cli show --task <task-id>
 ## Repository layout
 
 ```text
+.codex/                   Codex skills used in this repo
 docs/                     Architecture notes
+openspec/                 OpenSpec configuration
 tasks/                    Generated workflow workspaces
 src/scheduler_automation/ CLI and workflow engine
 tests/                    Standard-library test suite
 ```
 
-## Next implementation steps
+## Git workflow
 
-1. Initialize Git locally.
-2. Create the GitHub repository named `Scheduler`.
-3. Add the remote and push the first commit.
-4. Wire GitHub Actions after Git is available.
+This repository currently uses direct pushes to `main`.
+
+Standard cycle:
+
+1. update spec or task artifacts
+2. implement code
+3. run tests
+4. review changes
+5. commit
+6. push to `origin/main`
+
+## Verification
+
+Local verification:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m unittest discover -s tests -v
+```
+
+Remote verification:
+
+- GitHub Actions runs the same test suite on pushes and pull requests.
