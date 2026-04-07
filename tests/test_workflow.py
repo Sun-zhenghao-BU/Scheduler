@@ -1,44 +1,675 @@
 from __future__ import annotations
 
+import io
+import os
 import tempfile
 import unittest
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
-from scheduler_automation.workflow import WorkflowManager
+from scheduler_automation import cli
+from scheduler_automation.artifact_generation import GeneratedArtifacts, OpenSpecArtifactGenerator
+from scheduler_automation.dashboard import DashboardApp
+from scheduler_automation.workflow import CommandResult, WorkflowManager
+
+
+class RecordingRunner:
+    def __init__(self, root: Path, results: list[CommandResult] | None = None) -> None:
+        self.root = root
+        self.results = list(results or [])
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command: list[str], cwd: Path | None = None) -> CommandResult:
+        self.commands.append(list(command))
+
+        if command[:3] in (["openspec", "new", "change"], ["openspec.cmd", "new", "change"]):
+            change_name = command[3]
+            change_dir = self.root / "openspec" / "changes" / change_name
+            change_dir.mkdir(parents=True, exist_ok=True)
+            (change_dir / ".openspec.yaml").write_text("schema: spec-driven\n", encoding="utf-8")
+
+        if self.results:
+            return self.results.pop(0)
+        return CommandResult(returncode=0, stdout="", stderr="")
+
+
+class StubArtifactGenerator:
+    def __init__(
+        self,
+        proposal: str = "## Why\n\nGenerated.\n",
+        design: str = "## Context\n\nGenerated.\n",
+        tasks: str = (
+            "## 1. Define `generated`\n\n"
+            "- [ ] 1.1 Review and refine the generated proposal\n"
+            "- [ ] 1.2 Review and refine the generated design and spec\n\n"
+            "## 2. Implement and verify\n\n"
+            "- [ ] 2.1 Implement the requested behavior for `generated`\n"
+            "- [ ] 2.2 Run verification and record review findings\n"
+        ),
+        specs: dict[str, str] | None = None,
+    ) -> None:
+        self.artifacts = GeneratedArtifacts(
+            proposal=proposal,
+            design=design,
+            tasks=tasks,
+            specs=specs or {"specs/generated/spec.md": "## ADDED Requirements\n\nGenerated spec.\n"},
+        )
+        self.calls: list[dict[str, str]] = []
+
+    def generate(self, title: str, request: str, change_name: str) -> GeneratedArtifacts:
+        self.calls.append({"title": title, "request": request, "change_name": change_name})
+        return self.artifacts
+
+
+@contextmanager
+def temporary_cwd(path: Path):
+    original = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(original)
+
+
+class OpenSpecGenerationTests(unittest.TestCase):
+    def test_openspec_artifact_generator_builds_expected_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_dir = root / "templates"
+            template_dir.mkdir()
+            for name in ("proposal", "design", "specs", "tasks"):
+                (template_dir / f"{name}.md").write_text(f"{name} template\n", encoding="utf-8")
+
+            generator = OpenSpecArtifactGenerator(
+                root,
+                template_loader=lambda: {
+                    "proposal": template_dir / "proposal.md",
+                    "design": template_dir / "design.md",
+                    "specs": template_dir / "specs.md",
+                    "tasks": template_dir / "tasks.md",
+                },
+            )
+
+            artifacts = generator.generate(
+                title="Workflow dashboard",
+                request="Show workflow progress visually",
+                change_name="workflow-dashboard",
+            )
+
+            self.assertIn("workflow-dashboard", artifacts.proposal)
+            self.assertIn("Workflow dashboard", artifacts.design)
+            self.assertIn("specs/workflow-dashboard/spec.md", artifacts.preview_items()[2][0])
+            self.assertIn("Show workflow progress visually", artifacts.specs["specs/workflow-dashboard/spec.md"])
+
+    def test_create_task_generates_preview_and_writes_artifacts_after_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(root)
+            generator = StubArtifactGenerator()
+            previews: list[tuple[str, GeneratedArtifacts]] = []
+            manager = WorkflowManager(
+                root,
+                command_runner=runner,
+                artifact_generator=generator,
+                confirm_write=lambda change_name, artifacts: previews.append((change_name, artifacts)) or True,
+            )
+
+            metadata = manager.create_task("Generated workflow", "Generate artifacts")
+
+            change_dir = root / metadata.change_path
+            self.assertTrue((change_dir / "proposal.md").exists())
+            self.assertTrue((change_dir / "specs" / "generated" / "spec.md").exists())
+            self.assertEqual(previews[0][0], metadata.change_name)
+            spec_text = (root / "tasks" / metadata.task_id / "spec.md").read_text(encoding="utf-8")
+            self.assertIn("Generate artifacts", spec_text)
+            implementation_text = (root / "tasks" / metadata.task_id / "implementation.md").read_text(encoding="utf-8")
+            self.assertIn("Use the generated OpenSpec artifacts", implementation_text)
+            tasks_text = (change_dir / "tasks.md").read_text(encoding="utf-8")
+            self.assertIn("- [x] 1.1", tasks_text)
+            self.assertIn("- [x] 1.2", tasks_text)
+            self.assertIn("- [ ] 2.1", tasks_text)
+
+    def test_create_task_leaves_generated_files_unwritten_when_confirmation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(root)
+            manager = WorkflowManager(
+                root,
+                command_runner=runner,
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: False,
+            )
+
+            metadata = manager.create_task("Rejected workflow", "Generate artifacts")
+
+            change_dir = root / metadata.change_path
+            self.assertFalse((change_dir / "proposal.md").exists())
+            self.assertFalse((change_dir / "specs").exists())
+            journal_text = (root / "tasks" / metadata.task_id / "journal.md").read_text(encoding="utf-8")
+            self.assertIn("rejected", journal_text.lower())
+
+    def test_generated_tasks_sync_with_implementation_and_review_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(root, [CommandResult(0, "", ""), CommandResult(0, "verification ok", "")])
+            manager = WorkflowManager(
+                root,
+                command_runner=runner,
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+
+            metadata = manager.create_task("Synced workflow", "Generate artifacts")
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            manager.verify_task(metadata.task_id)
+            manager.advance_task(metadata.task_id, "review")
+            review_path = root / "tasks" / metadata.task_id / "review.md"
+            review_path.write_text(
+                "# Review\n\n"
+                "## Summary\n\n"
+                "Reviewed workflow changes and found no blocking issues.\n\n"
+                "## Findings\n\n"
+                "None.\n",
+                encoding="utf-8",
+            )
+            manager.review_task(metadata.task_id)
+
+            tasks_text = (root / "openspec" / "changes" / metadata.change_name / "tasks.md").read_text(encoding="utf-8")
+            self.assertIn("- [x] 2.1", tasks_text)
+            self.assertIn("- [x] 2.2", tasks_text)
+
+    def test_generated_tasks_reopen_when_review_finds_blocking_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(root, [CommandResult(0, "", ""), CommandResult(0, "verification ok", "")])
+            manager = WorkflowManager(
+                root,
+                command_runner=runner,
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+
+            metadata = manager.create_task("Reopen workflow", "Generate artifacts")
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            manager.verify_task(metadata.task_id)
+            manager.advance_task(metadata.task_id, "review")
+            review_path = root / "tasks" / metadata.task_id / "review.md"
+            review_path.write_text(
+                "# Review\n\n"
+                "## Summary\n\n"
+                "Found one blocking issue.\n\n"
+                "## Findings\n\n"
+                "### Finding F001\n"
+                "- Severity: high\n"
+                "- Status: open\n"
+                "- Summary: Something is still wrong.\n",
+                encoding="utf-8",
+            )
+            manager.review_task(metadata.task_id)
+
+            tasks_text = (root / "openspec" / "changes" / metadata.change_name / "tasks.md").read_text(encoding="utf-8")
+            self.assertIn("- [x] 2.1", tasks_text)
+            self.assertIn("- [ ] 2.2", tasks_text)
 
 
 class WorkflowManagerTests(unittest.TestCase):
-    def test_create_task_generates_workspace(self) -> None:
+    def test_autopilot_advances_successful_task_to_release_and_writes_process_docs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            manager = WorkflowManager(Path(temp_dir))
-            metadata = manager.create_task("Ship workflow")
+            root = Path(temp_dir)
+            runner = RecordingRunner(root, [CommandResult(0, "", ""), CommandResult(0, "verification ok", "")])
+            manager = WorkflowManager(
+                root,
+                command_runner=runner,
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+            metadata = manager.create_task("Autopilot workflow", "Automate the local workflow")
 
-            task_dir = Path(temp_dir) / "tasks" / metadata.task_id
-            self.assertTrue(task_dir.exists())
-            self.assertEqual(metadata.current_stage, "intake")
-            self.assertTrue((task_dir / "spec.md").exists())
-            self.assertTrue((task_dir / "metadata.json").exists())
+            result = manager.autopilot_task(metadata.task_id)
 
-    def test_advance_task_updates_stage(self) -> None:
+            updated, _ = manager.get_task(metadata.task_id)
+            self.assertEqual(updated.current_stage, "release")
+            self.assertEqual(result.final_stage, "release")
+            self.assertTrue(result.ready_for_completion)
+            self.assertIn("release-ready", result.stop_reason)
+            implementation_text = (root / "tasks" / metadata.task_id / "implementation.md").read_text(encoding="utf-8")
+            review_text = (root / "tasks" / metadata.task_id / "review.md").read_text(encoding="utf-8")
+            release_text = (root / "tasks" / metadata.task_id / "release.md").read_text(encoding="utf-8")
+            self.assertIn("OpenSpec change:", implementation_text)
+            self.assertIn("no blocking issues", review_text.lower())
+            self.assertIn("Ready to archive", release_text)
+
+    def test_autopilot_stops_in_fix_when_verification_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            manager = WorkflowManager(Path(temp_dir))
+            root = Path(temp_dir)
+            runner = RecordingRunner(root, [CommandResult(0, "", ""), CommandResult(1, "", "verification failed")])
+            manager = WorkflowManager(
+                root,
+                command_runner=runner,
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+            metadata = manager.create_task("Autopilot fix workflow", "Automate the local workflow")
+
+            result = manager.autopilot_task(metadata.task_id)
+
+            updated, _ = manager.get_task(metadata.task_id)
+            self.assertEqual(updated.current_stage, "fix")
+            self.assertEqual(result.final_stage, "fix")
+            self.assertFalse(result.ready_for_completion)
+            self.assertIn("code changes required", result.stop_reason)
+            review_text = (root / "tasks" / metadata.task_id / "review.md").read_text(encoding="utf-8")
+            fixes_text = (root / "tasks" / metadata.task_id / "fixes.md").read_text(encoding="utf-8")
+            self.assertIn("Severity: high", review_text)
+            self.assertIn("verification failed", review_text.lower())
+            self.assertIn("apply code changes", fixes_text.lower())
+
+    def test_run_command_uses_windows_cmd_shim_for_openspec(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(root)
+
+            with patch("scheduler_automation.workflow.os.name", "nt"), patch(
+                "scheduler_automation.workflow.shutil.which"
+            ) as which_mock, patch("scheduler_automation.workflow.subprocess.run") as run_mock:
+                which_mock.side_effect = lambda name: (
+                    "C:\\Users\\SZH\\AppData\\Roaming\\npm\\openspec.cmd" if name == "openspec.cmd" else None
+                )
+                run_mock.return_value.returncode = 0
+                run_mock.return_value.stdout = "ok"
+                run_mock.return_value.stderr = ""
+
+                manager._run_command(["openspec", "--help"])
+
+            self.assertEqual(run_mock.call_args.args[0][0], "C:\\Users\\SZH\\AppData\\Roaming\\npm\\openspec.cmd")
+            self.assertEqual(run_mock.call_args.kwargs["encoding"], "utf-8")
+            self.assertEqual(run_mock.call_args.kwargs["errors"], "replace")
+
+    def test_create_task_creates_openspec_change_and_tracks_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(root)
+            manager = WorkflowManager(root, command_runner=runner)
+
+            metadata = manager.create_task("Ship workflow", "Need a gated workflow")
+
+            self.assertEqual(metadata.change_name, "ship-workflow")
+            self.assertEqual(metadata.change_path, "openspec/changes/ship-workflow")
+            self.assertEqual(runner.commands[0], ["openspec", "new", "change", "ship-workflow"])
+            self.assertTrue((root / metadata.change_path / ".openspec.yaml").exists())
+
+    def test_advance_to_implement_requires_openspec_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(root, command_runner=RecordingRunner(root))
             metadata = manager.create_task("Advance workflow")
 
-            updated = manager.advance_task(metadata.task_id, "review")
+            manager.advance_task(metadata.task_id, "spec")
 
-            self.assertEqual(updated.current_stage, "review")
-            summary = manager.render_task(metadata.task_id)
-            self.assertIn("Current stage: review", summary)
+            with self.assertRaisesRegex(ValueError, "proposal.md"):
+                manager.advance_task(metadata.task_id, "implement")
 
-    def test_append_log_writes_journal(self) -> None:
+    def test_advance_to_implement_requires_openspec_specs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            manager = WorkflowManager(Path(temp_dir))
-            metadata = manager.create_task("Log workflow")
+            root = Path(temp_dir)
+            manager = WorkflowManager(root, command_runner=RecordingRunner(root))
+            metadata = manager.create_task("Spec workflow")
+            change_dir = root / "openspec" / "changes" / metadata.change_name
+            (change_dir / "proposal.md").write_text("# Proposal\n\nReady.\n", encoding="utf-8")
+            (change_dir / "design.md").write_text("# Design\n\nReady.\n", encoding="utf-8")
+            (change_dir / "tasks.md").write_text("- [ ] First task\n", encoding="utf-8")
+            self._write_local_spec_summary(root, metadata.task_id)
+            manager.advance_task(metadata.task_id, "spec")
 
-            manager.append_log(metadata.task_id, "implement", "Implemented CLI")
+            with self.assertRaisesRegex(ValueError, "specs"):
+                manager.advance_task(metadata.task_id, "implement")
 
-            journal = (Path(temp_dir) / "tasks" / metadata.task_id / "journal.md").read_text(encoding="utf-8")
-            self.assertIn("[implement] Implemented CLI", journal)
+    def test_verify_records_successful_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(root, [CommandResult(0, "", ""), CommandResult(0, "verification ok", "")])
+            manager = WorkflowManager(root, command_runner=runner)
+            metadata = manager.create_task("Verify workflow")
+
+            result = manager.verify_task(metadata.task_id)
+
+            implementation_path = root / "tasks" / metadata.task_id / "implementation.md"
+            self.assertTrue(result.passed)
+            self.assertEqual(result.command, "python -m unittest discover -s tests -v")
+            self.assertIn("verification ok", implementation_path.read_text(encoding="utf-8"))
+
+    def test_review_blocks_release_when_high_finding_is_open(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(root, [CommandResult(0, "tests passed", "")])
+            manager = WorkflowManager(root, command_runner=runner)
+            metadata = manager.create_task("Review workflow")
+            self._write_spec_artifacts(root, metadata.change_name, "- [x] done\n")
+            self._write_local_spec_summary(root, metadata.task_id)
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            self._write_implementation_note(root, metadata.task_id, "Implemented the workflow engine.\n")
+            manager.verify_task(metadata.task_id)
+            manager.advance_task(metadata.task_id, "review")
+
+            review_path = root / "tasks" / metadata.task_id / "review.md"
+            review_path.write_text(
+                "# Review\n\n"
+                "## Summary\n\n"
+                "Reviewed workflow changes.\n\n"
+                "## Findings\n\n"
+                "### Finding F001\n"
+                "- Severity: high\n"
+                "- Status: open\n"
+                "- Summary: Release gate can be bypassed.\n",
+                encoding="utf-8",
+            )
+
+            summary = manager.review_task(metadata.task_id)
+
+            self.assertEqual(summary.open_by_severity["high"], 1)
+            self.assertIn("high severity", " ".join(manager.validate_stage_transition(metadata.task_id, "release")))
+
+    def test_complete_task_archives_change_and_runs_git_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(
+                root,
+                [
+                    CommandResult(0, "tests passed", ""),
+                    CommandResult(0, "", ""),
+                    CommandResult(0, "", ""),
+                    CommandResult(0, "", ""),
+                ],
+            )
+            manager = WorkflowManager(root, command_runner=runner)
+            metadata = manager.create_task("Complete workflow")
+            self._write_spec_artifacts(root, metadata.change_name, "- [x] done\n")
+            self._write_local_spec_summary(root, metadata.task_id)
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            self._write_implementation_note(root, metadata.task_id, "Implemented the workflow engine.\n")
+            manager.verify_task(metadata.task_id)
+            manager.advance_task(metadata.task_id, "review")
+            self._write_review_summary(root, metadata.task_id)
+            manager.review_task(metadata.task_id)
+            manager.advance_task(metadata.task_id, "release")
+            self._write_release_summary(root, metadata.task_id)
+
+            result = manager.complete_task(metadata.task_id)
+
+            archive_dir = root / result.archive_path
+            self.assertTrue(archive_dir.exists())
+            self.assertEqual(runner.commands[-3], ["git", "add", "."])
+            self.assertEqual(
+                runner.commands[-2],
+                ["git", "commit", "-m", f"chore: complete {metadata.task_id} ({metadata.change_name})"],
+            )
+            self.assertEqual(runner.commands[-1], ["git", "push", "--set-upstream", "origin", "HEAD"])
+
+    def _write_spec_artifacts(self, root: Path, change_name: str, tasks_content: str) -> None:
+        change_dir = root / "openspec" / "changes" / change_name
+        (change_dir / "proposal.md").write_text("# Proposal\n\nReady.\n", encoding="utf-8")
+        (change_dir / "design.md").write_text("# Design\n\nReady.\n", encoding="utf-8")
+        specs_dir = change_dir / "specs" / change_name
+        specs_dir.mkdir(parents=True, exist_ok=True)
+        (specs_dir / "spec.md").write_text("## ADDED Requirements\n\nReady.\n", encoding="utf-8")
+        (change_dir / "tasks.md").write_text(tasks_content, encoding="utf-8")
+
+    def _write_local_spec_summary(self, root: Path, task_id: str) -> None:
+        spec_path = root / "tasks" / task_id / "spec.md"
+        spec_path.write_text(
+            "# Spec\n\n"
+            "## OpenSpec Change\n\n"
+            "- Name: bound-change\n"
+            "- Path: openspec/changes/bound-change\n\n"
+            "## Summary\n\n"
+            "This task implements the gated workflow engine.\n",
+            encoding="utf-8",
+        )
+
+    def _write_implementation_note(self, root: Path, task_id: str, note: str) -> None:
+        path = root / "tasks" / task_id / "implementation.md"
+        path.write_text(
+            "# Superpower Implementation\n\n"
+            "## Plan\n\n"
+            f"{note}\n"
+            "## Verification\n\n"
+            "- Pending\n",
+            encoding="utf-8",
+        )
+
+    def _write_review_summary(self, root: Path, task_id: str) -> None:
+        review_path = root / "tasks" / task_id / "review.md"
+        review_path.write_text(
+            "# Review\n\n"
+            "## Summary\n\n"
+            "Reviewed workflow changes and found no blocking issues.\n\n"
+            "## Findings\n\n"
+            "None.\n",
+            encoding="utf-8",
+        )
+
+    def _write_release_summary(self, root: Path, task_id: str) -> None:
+        release_path = root / "tasks" / task_id / "release.md"
+        release_path.write_text(
+            "# Release\n\n"
+            "## Notes\n\n"
+            "Archive this change and push it upstream.\n",
+            encoding="utf-8",
+        )
+
+
+class CLITests(unittest.TestCase):
+    def test_autopilot_command_prints_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = io.StringIO()
+
+            def manager_factory(
+                current_root: Path,
+                command_runner=None,
+                artifact_generator=None,
+                confirm_write=None,
+            ):
+                return WorkflowManager(
+                    current_root,
+                    command_runner=RecordingRunner(
+                        current_root,
+                        [CommandResult(0, "", ""), CommandResult(0, "verification ok", "")],
+                    ),
+                    artifact_generator=StubArtifactGenerator(),
+                    confirm_write=lambda *_: True,
+                )
+
+            with (
+                temporary_cwd(root),
+                redirect_stdout(output),
+                patch("scheduler_automation.cli.OpenSpecArtifactGenerator", return_value=StubArtifactGenerator()),
+                patch("scheduler_automation.cli.WorkflowManager", side_effect=manager_factory),
+                patch("builtins.input", return_value="y"),
+            ):
+                self.assertEqual(
+                    cli.main(["new-task", "--title", "Autopilot CLI", "--request", "Run autopilot"]),
+                    0,
+                )
+
+            created_line = next(
+                line for line in output.getvalue().splitlines() if line.startswith("Created task:")
+            )
+            task_id = created_line.split("Created task: ", 1)[1].split(" | ", 1)[0]
+            autopilot_output = io.StringIO()
+            with (
+                temporary_cwd(root),
+                redirect_stdout(autopilot_output),
+                patch("scheduler_automation.cli.WorkflowManager", side_effect=manager_factory),
+            ):
+                exit_code = cli.main(["autopilot", "--task", task_id])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("stopped at release", autopilot_output.getvalue())
+
+    def test_status_reports_blocked_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(root, command_runner=RecordingRunner(root))
+            metadata = manager.create_task("CLI workflow")
+            manager.advance_task(metadata.task_id, "spec")
+            output = io.StringIO()
+
+            with temporary_cwd(root), redirect_stdout(output):
+                exit_code = cli.main(["status"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("BLOCKED", output.getvalue())
+
+    def test_new_task_prints_generated_preview_before_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = io.StringIO()
+            stub_generator = StubArtifactGenerator()
+
+            def manager_factory(
+                current_root: Path,
+                command_runner=None,
+                artifact_generator=None,
+                confirm_write=None,
+            ):
+                return WorkflowManager(
+                    current_root,
+                    command_runner=RecordingRunner(current_root),
+                    artifact_generator=artifact_generator,
+                    confirm_write=confirm_write,
+                )
+
+            with (
+                temporary_cwd(root),
+                redirect_stdout(output),
+                patch("scheduler_automation.cli.OpenSpecArtifactGenerator", return_value=stub_generator),
+                patch("scheduler_automation.cli.WorkflowManager", side_effect=manager_factory),
+                patch("builtins.input", return_value="y"),
+            ):
+                exit_code = cli.main(["new-task", "--title", "Preview workflow", "--request", "Generate preview"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Generated proposal.md", output.getvalue())
+            self.assertIn("Generated specs/generated/spec.md", output.getvalue())
+            self.assertIn("Write generated artifacts", output.getvalue())
+
+
+class DashboardTests(unittest.TestCase):
+    def test_dashboard_lists_tasks_as_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(root, command_runner=RecordingRunner(root))
+            metadata = manager.create_task("Dashboard workflow")
+            manager.advance_task(metadata.task_id, "spec")
+            app = DashboardApp(root)
+
+            payload = app.build_task_list_payload()
+
+            self.assertEqual(payload["tasks"][0]["state"], "BLOCKED")
+            self.assertEqual(payload["tasks"][0]["task_id"], metadata.task_id)
+
+    def test_dashboard_returns_task_detail_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(root, command_runner=RecordingRunner(root))
+            metadata = manager.create_task("Dashboard detail")
+            manager.advance_task(metadata.task_id, "spec")
+            app = DashboardApp(root)
+
+            detail = app.build_task_detail_payload(metadata.task_id)
+
+            self.assertEqual(detail["task"]["current_stage"], "spec")
+            self.assertEqual(detail["task"]["change_name"], metadata.change_name)
+            self.assertIn("blocked_reasons", detail["task"])
+            self.assertIn("suggested_actions", detail["task"])
+
+    def test_dashboard_root_returns_html(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app = DashboardApp(root)
+
+            status, content_type, body = app.handle_request("/")
+
+            self.assertEqual(status, 200)
+            self.assertEqual(content_type, "text/html; charset=utf-8")
+            self.assertIn("task-list", body.decode("utf-8"))
+
+    def test_dashboard_html_contains_task_panels(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app = DashboardApp(root)
+
+            html = app.render_index_html()
+
+            self.assertIn('id="task-list"', html)
+            self.assertIn('id="task-detail"', html)
+
+    def test_dashboard_missing_task_returns_404(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app = DashboardApp(root)
+
+            status, content_type, body = app.handle_request("/api/tasks/missing-task")
+
+            self.assertEqual(status, 404)
+            self.assertEqual(content_type, "application/json; charset=utf-8")
+            self.assertIn("error", body.decode("utf-8"))
+
+    def test_dashboard_shows_blocker_aware_guidance_for_review_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(root, command_runner=RecordingRunner(root))
+            metadata = manager.create_task(
+                "Dashboard review guidance",
+                "Show workflow progress in the browser",
+            )
+            change_dir = root / "openspec" / "changes" / metadata.change_name
+            (change_dir / "proposal.md").write_text("# Proposal\n\nReady.\n", encoding="utf-8")
+            (change_dir / "design.md").write_text("# Design\n\nReady.\n", encoding="utf-8")
+            specs_dir = change_dir / "specs" / metadata.change_name
+            specs_dir.mkdir(parents=True, exist_ok=True)
+            (specs_dir / "spec.md").write_text("## ADDED Requirements\n\nReady.\n", encoding="utf-8")
+            (change_dir / "tasks.md").write_text("- [ ] First task\n", encoding="utf-8")
+            spec_path = root / "tasks" / metadata.task_id / "spec.md"
+            spec_path.write_text(
+                "# Spec\n\n"
+                "## OpenSpec Change\n\n"
+                f"- Name: {metadata.change_name}\n"
+                f"- Path: {metadata.change_path}\n\n"
+                "## Summary\n\n"
+                "Show workflow progress in the browser\n\n"
+                "## Acceptance Alignment\n\n"
+                "- Review the generated OpenSpec artifacts before implementation.\n",
+                encoding="utf-8",
+            )
+            implementation_path = root / "tasks" / metadata.task_id / "implementation.md"
+            implementation_path.write_text(
+                "# Superpower Implementation\n\n"
+                "## Plan\n\n"
+                "Use the generated OpenSpec artifacts for dashboard-demo as the implementation baseline.\n\n"
+                "## Code changes\n\n"
+                "- No implementation changes recorded yet.\n\n"
+                "## Verification\n\n"
+                "- Pending\n",
+                encoding="utf-8",
+            )
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            manager.verify_task(metadata.task_id)
+            manager.advance_task(metadata.task_id, "review")
+            app = DashboardApp(root)
+
+            detail = app.build_task_detail_payload(metadata.task_id)
+
+            self.assertEqual(detail["task"]["next_action"], "resolve blockers")
+            self.assertTrue(any("autopilot" in step for step in detail["task"]["suggested_actions"]))
+            self.assertTrue(any("synchronized automatically" in step for step in detail["task"]["suggested_actions"]))
 
 
 if __name__ == "__main__":
