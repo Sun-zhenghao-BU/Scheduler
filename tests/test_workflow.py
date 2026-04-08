@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -567,11 +568,11 @@ class DashboardTests(unittest.TestCase):
             manager = WorkflowManager(root, command_runner=RecordingRunner(root))
             metadata = manager.create_task("Dashboard workflow")
             manager.advance_task(metadata.task_id, "spec")
-            app = DashboardApp(root)
+            app = DashboardApp(root, manager=manager)
 
             payload = app.build_task_list_payload()
 
-            self.assertEqual(payload["tasks"][0]["state"], "BLOCKED")
+            self.assertEqual(payload["tasks"][0]["state"], "Waiting for workflow input")
             self.assertEqual(payload["tasks"][0]["task_id"], metadata.task_id)
 
     def test_dashboard_returns_task_detail_payload(self) -> None:
@@ -580,7 +581,7 @@ class DashboardTests(unittest.TestCase):
             manager = WorkflowManager(root, command_runner=RecordingRunner(root))
             metadata = manager.create_task("Dashboard detail")
             manager.advance_task(metadata.task_id, "spec")
-            app = DashboardApp(root)
+            app = DashboardApp(root, manager=manager)
 
             detail = app.build_task_detail_payload(metadata.task_id)
 
@@ -588,17 +589,23 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(detail["task"]["change_name"], metadata.change_name)
             self.assertIn("blocked_reasons", detail["task"])
             self.assertIn("suggested_actions", detail["task"])
+            self.assertIn("timeline", detail["task"])
+            self.assertIn("conclusion", detail["task"])
 
     def test_dashboard_root_returns_html(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             app = DashboardApp(root)
 
-            status, content_type, body = app.handle_request("/")
+            status, content_type, body = app.handle_request("GET", "/")
 
             self.assertEqual(status, 200)
             self.assertEqual(content_type, "text/html; charset=utf-8")
-            self.assertIn("task-list", body.decode("utf-8"))
+            html = body.decode("utf-8")
+            self.assertIn("continue-autopilot", html)
+            self.assertIn("complete-task", html)
+            self.assertIn("new-task-title", html)
+            self.assertIn("create-task", html)
 
     def test_dashboard_html_contains_task_panels(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -607,15 +614,15 @@ class DashboardTests(unittest.TestCase):
 
             html = app.render_index_html()
 
-            self.assertIn('id="task-list"', html)
             self.assertIn('id="task-detail"', html)
+            self.assertIn('id="task-selector"', html)
 
     def test_dashboard_missing_task_returns_404(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             app = DashboardApp(root)
 
-            status, content_type, body = app.handle_request("/api/tasks/missing-task")
+            status, content_type, body = app.handle_request("GET", "/api/tasks/missing-task")
 
             self.assertEqual(status, 404)
             self.assertEqual(content_type, "application/json; charset=utf-8")
@@ -663,13 +670,93 @@ class DashboardTests(unittest.TestCase):
             manager.advance_task(metadata.task_id, "implement")
             manager.verify_task(metadata.task_id)
             manager.advance_task(metadata.task_id, "review")
-            app = DashboardApp(root)
+            app = DashboardApp(root, manager=manager)
 
             detail = app.build_task_detail_payload(metadata.task_id)
 
             self.assertEqual(detail["task"]["next_action"], "resolve blockers")
             self.assertTrue(any("autopilot" in step for step in detail["task"]["suggested_actions"]))
             self.assertTrue(any("synchronized automatically" in step for step in detail["task"]["suggested_actions"]))
+
+    def test_dashboard_can_trigger_autopilot_action(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(
+                root,
+                command_runner=RecordingRunner(root, [CommandResult(0, "", ""), CommandResult(0, "verification ok", "")]),
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+            metadata = manager.create_task("Dashboard autopilot", "Run from dashboard")
+            app = DashboardApp(root, manager=manager)
+
+            status, content_type, body = app.handle_request("POST", f"/api/tasks/{metadata.task_id}/autopilot")
+
+            payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(content_type, "application/json; charset=utf-8")
+            self.assertEqual(payload["result"]["final_stage"], "release")
+            self.assertEqual(payload["task"]["current_stage"], "release")
+
+    def test_dashboard_can_trigger_complete_action(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runner = RecordingRunner(
+                root,
+                [
+                    CommandResult(0, "", ""),
+                    CommandResult(0, "verification ok", ""),
+                    CommandResult(0, "", ""),
+                    CommandResult(0, "", ""),
+                    CommandResult(0, "", ""),
+                ],
+            )
+            manager = WorkflowManager(
+                root,
+                command_runner=runner,
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+            metadata = manager.create_task("Dashboard complete", "Complete from dashboard")
+            manager.autopilot_task(metadata.task_id)
+            app = DashboardApp(root, manager=manager)
+
+            status, content_type, body = app.handle_request("POST", f"/api/tasks/{metadata.task_id}/complete")
+
+            payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(content_type, "application/json; charset=utf-8")
+            self.assertIn("archive_path", payload["result"])
+            self.assertTrue(payload["task"]["completed"])
+
+    def test_dashboard_can_create_task_action(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(
+                root,
+                command_runner=RecordingRunner(root, [CommandResult(0, "", ""), CommandResult(0, "verification ok", "")]),
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+            app = DashboardApp(root, manager=manager)
+
+            request = {
+                "title": "Task from dashboard",
+                "request": "Create and run from dashboard",
+                "run_autopilot": True,
+            }
+            status, content_type, body = app.handle_request(
+                "POST",
+                "/api/tasks",
+                json.dumps(request).encode("utf-8"),
+            )
+
+            payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(content_type, "application/json; charset=utf-8")
+            self.assertIn("task_id", payload["task"])
+            self.assertEqual(payload["result"]["action"], "create_task")
+            self.assertIn(payload["task"]["current_stage"], {"review", "release", "fix"})
 
 
 if __name__ == "__main__":
