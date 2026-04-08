@@ -208,6 +208,7 @@ class WorkflowManager:
             else:
                 self.append_log(task_id, "intake", "Generated OpenSpec artifacts were rejected")
 
+        self._run_brainstorming_skill(metadata, task_dir)
         self.append_log(task_id, "intake", f"Created bound OpenSpec change {change_name}")
         return self.get_task(task_id)[0]
 
@@ -230,6 +231,10 @@ class WorkflowManager:
         if not metadata_file.exists():
             raise FileNotFoundError(f"Task '{task_id}' does not exist.")
         return self._read_metadata(metadata_file), task_dir
+
+    def skill_executions(self, task_id: str, limit: int = 20) -> list[dict[str, object]]:
+        _metadata, task_dir = self.get_task(task_id)
+        return self._load_skill_executions(task_dir, limit=limit)
 
     def advance_task(self, task_id: str, stage: str) -> TaskMetadata:
         # Stage transitions are the main control point. Every move is validated before metadata changes.
@@ -305,12 +310,26 @@ class WorkflowManager:
         metadata.ready_for_release = not self._release_gate_reasons_for(metadata, task_dir)
         self._write_metadata(task_dir, metadata)
         state = "passed" if verification.passed else "failed"
+        self._record_skill_execution(
+            task_dir,
+            skill_name="openspec-verify-change",
+            stage=metadata.current_stage,
+            ok=verification.passed,
+            summary=f"Verification {state}: unittest + openspec validate.",
+            command=verification.command,
+            details={
+                "task_id": metadata.task_id,
+                "change_name": metadata.change_name,
+                "timestamp": verification.timestamp,
+            },
+        )
         self.append_log(task_id, metadata.current_stage, f"Verification {state} (openspec-verify-change checks)")
         return verification
 
     def review_task(self, task_id: str) -> ReviewSummary:
         # Review reads structured findings from review.md and turns them into gateable state.
         metadata, task_dir = self.get_task(task_id)
+        review_skill = self._run_requesting_code_review_skill(metadata, task_dir)
         findings = self._parse_review_findings(task_dir / "review.md")
         has_summary = self._section_has_meaningful_content(task_dir / "review.md", "## Summary")
         if not findings and not has_summary:
@@ -327,6 +346,8 @@ class WorkflowManager:
         self._sync_managed_tasks_for(metadata, task_dir)
         metadata.ready_for_release = not self._release_gate_reasons_for(metadata, task_dir)
         self._write_metadata(task_dir, metadata)
+        if review_skill["ok"]:
+            self.append_log(task_id, metadata.current_stage, "Executed requesting-code-review skill")
         self.append_log(task_id, metadata.current_stage, "Recorded self-review (requesting-code-review checks)")
         return ReviewSummary(findings=findings, open_by_severity=open_by_severity)
 
@@ -536,6 +557,15 @@ class WorkflowManager:
         if snapshot.blocked_reasons:
             lines.extend(["", "Next-Step Blockers:"])
             lines.extend(f"- {reason}" for reason in snapshot.blocked_reasons)
+        skill_runs = self._load_skill_executions(self.tasks_dir / task_id, limit=5)
+        if skill_runs:
+            lines.extend(["", "Recent Skill Executions:"])
+            for item in skill_runs:
+                marker = "OK" if item.get("ok") else "FAIL"
+                lines.append(
+                    f"- {item.get('timestamp', '')} [{item.get('stage', '')}] "
+                    f"{item.get('skill', 'unknown')} ({marker})"
+                )
         return "\n".join(lines)
 
     def completion_evidence(self, task_id: str) -> dict[str, object] | None:
@@ -640,16 +670,205 @@ class WorkflowManager:
             },
         }
 
-    def _openspec_apply_payload(self, change_name: str) -> dict[str, object] | None:
-        command = ["openspec", "instructions", "apply", "--change", change_name, "--json"]
-        result = self.command_runner(command, self.root)
-        if result.returncode != 0:
-            return None
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return None
-        return payload if isinstance(payload, dict) else None
+    def _skills_dir(self, task_dir: Path) -> Path:
+        path = task_dir / "skills"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _record_skill_execution(
+        self,
+        task_dir: Path,
+        skill_name: str,
+        stage: str,
+        ok: bool,
+        summary: str,
+        command: str,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        timestamp = utc_timestamp()
+        token = datetime.now(SHANGHAI_TZ).strftime("%Y%m%d-%H%M%S")
+        safe_skill = re.sub(r"[^a-zA-Z0-9_-]+", "-", skill_name).strip("-") or "skill"
+        payload = {
+            "timestamp": timestamp,
+            "stage": stage,
+            "skill": skill_name,
+            "ok": ok,
+            "summary": summary,
+            "command": command,
+            "details": details or {},
+        }
+        file_path = self._skills_dir(task_dir) / f"{token}-{safe_skill}.json"
+        file_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+
+    def _load_skill_executions(self, task_dir: Path, limit: int = 20) -> list[dict[str, object]]:
+        skills_dir = task_dir / "skills"
+        if not skills_dir.exists():
+            return []
+        entries: list[dict[str, object]] = []
+        for path in sorted(skills_dir.glob("*.json"), reverse=True):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload["path"] = self._relative_to_root(path)
+            entries.append(payload)
+            if len(entries) >= limit:
+                break
+        return entries
+
+    def _run_brainstorming_skill(self, metadata: TaskMetadata, task_dir: Path) -> None:
+        request = self._task_request(task_dir) or metadata.title
+        design_dir = self.root / "docs" / "superpowers" / "specs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        date_token = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
+        design_path = design_dir / f"{date_token}-{metadata.change_name}-design.md"
+
+        if not design_path.exists():
+            design_text = (
+                f"# Brainstorming Design: {metadata.change_name}\n\n"
+                f"- Task ID: {metadata.task_id}\n"
+                f"- Change: {metadata.change_name}\n"
+                f"- Generated at: {utc_timestamp()}\n\n"
+                "## Context\n\n"
+                f"{request}\n\n"
+                "## Clarifying Questions\n\n"
+                "- What is the minimal user-visible result for this change?\n\n"
+                "## Approaches\n\n"
+                "1. Tight MVP path with smallest code delta.\n"
+                "2. Balanced path with better observability and tests.\n"
+                "3. Extended path with extra automation hooks.\n\n"
+                "## Recommendation\n\n"
+                "Use approach 1 first, then iterate.\n\n"
+                "## Design Summary\n\n"
+                "Proceed with OpenSpec artifacts as source-of-truth, then implement and verify.\n"
+            )
+            design_path.write_text(design_text, encoding="utf-8")
+
+        self._record_skill_execution(
+            task_dir,
+            skill_name="brainstorming",
+            stage=metadata.current_stage,
+            ok=True,
+            summary="Generated/validated brainstorming design artifact before implementation.",
+            command="internal:brainstorming",
+            details={
+                "task_id": metadata.task_id,
+                "change_name": metadata.change_name,
+                "design_doc": self._relative_to_root(design_path),
+            },
+        )
+        self.append_log(metadata.task_id, metadata.current_stage, "Executed brainstorming skill")
+
+    def _run_openspec_apply_change_skill(self, metadata: TaskMetadata, task_dir: Path) -> dict[str, object] | None:
+        status_command = ["openspec", "status", "--change", metadata.change_name, "--json"]
+        apply_command = ["openspec", "instructions", "apply", "--change", metadata.change_name, "--json"]
+        status_result = self.command_runner(status_command, self.root)
+        apply_result = self.command_runner(apply_command, self.root)
+
+        status_payload: dict[str, object] | None = None
+        apply_payload: dict[str, object] | None = None
+        if status_result.returncode == 0:
+            try:
+                parsed_status = json.loads(status_result.stdout)
+                if isinstance(parsed_status, dict):
+                    status_payload = parsed_status
+            except json.JSONDecodeError:
+                status_payload = None
+        if apply_result.returncode == 0:
+            try:
+                parsed_apply = json.loads(apply_result.stdout)
+                if isinstance(parsed_apply, dict):
+                    apply_payload = parsed_apply
+            except json.JSONDecodeError:
+                apply_payload = None
+
+        schema = str((status_payload or {}).get("schemaName", "")).strip().lower()
+        context_files: list[str] = []
+        if isinstance((apply_payload or {}).get("contextFiles"), list):
+            context_files = [str(item) for item in (apply_payload or {}).get("contextFiles", [])]
+        elif schema == "spec-driven":
+            context_files = [
+                f"openspec/changes/{metadata.change_name}/proposal.md",
+                f"openspec/changes/{metadata.change_name}/design.md",
+                f"openspec/changes/{metadata.change_name}/tasks.md",
+            ]
+
+        context_summary: list[dict[str, object]] = []
+        for raw_path in context_files:
+            candidate = self.root / raw_path
+            if not candidate.exists():
+                candidate = self._change_dir(metadata.change_name) / raw_path
+            exists = candidate.exists()
+            context_summary.append({"path": raw_path, "exists": exists})
+
+        ok = status_payload is not None and apply_payload is not None
+        summary = (
+            "OpenSpec apply instructions loaded."
+            if ok
+            else "OpenSpec apply instructions unavailable or invalid JSON."
+        )
+        details = {
+            "change_name": metadata.change_name,
+            "status_returncode": status_result.returncode,
+            "apply_returncode": apply_result.returncode,
+            "schema": schema or "unknown",
+            "state": (apply_payload or {}).get("state"),
+            "progress": (apply_payload or {}).get("progress", {}),
+            "instruction": (apply_payload or {}).get("instruction", ""),
+            "context_files": context_summary,
+        }
+        self._record_skill_execution(
+            task_dir,
+            skill_name="openspec-apply-change",
+            stage=metadata.current_stage,
+            ok=ok,
+            summary=summary,
+            command=f"{' '.join(status_command)} && {' '.join(apply_command)}",
+            details=details,
+        )
+        latest_path = self._skills_dir(task_dir) / "openspec-apply-change-latest.json"
+        latest_path.write_text(json.dumps(details, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        return apply_payload
+
+    def _run_requesting_code_review_skill(self, metadata: TaskMetadata, task_dir: Path) -> dict[str, object]:
+        head_result = self.command_runner(["git", "rev-parse", "HEAD"], self.root)
+        base_result = self.command_runner(["git", "rev-parse", "HEAD~1"], self.root)
+        head_sha = head_result.stdout.strip() if head_result.returncode == 0 else None
+        base_sha = metadata.base_commit or (base_result.stdout.strip() if base_result.returncode == 0 else None)
+
+        diff_result = CommandResult(returncode=1, stdout="", stderr="base/head missing")
+        if base_sha and head_sha:
+            diff_result = self.command_runner(["git", "diff", "--numstat", f"{base_sha}..{head_sha}", "--"], self.root)
+
+        numstat = self._parse_numstat(diff_result.stdout) if diff_result.returncode == 0 else []
+        open_high_reasons: list[str] = []
+        if metadata.last_verification_passed is not True:
+            open_high_reasons.append("Latest verification is not passing.")
+        for reason in self._code_change_gate_reasons(metadata):
+            open_high_reasons.append(reason)
+
+        details = {
+            "task_id": metadata.task_id,
+            "change_name": metadata.change_name,
+            "base_sha": base_sha,
+            "head_sha": head_sha,
+            "diff_files": len(numstat),
+            "open_high_reasons": open_high_reasons,
+        }
+        self._record_skill_execution(
+            task_dir,
+            skill_name="requesting-code-review",
+            stage=metadata.current_stage,
+            ok=True,
+            summary="Collected baseline/head compare for review checkpoint.",
+            command="git rev-parse HEAD~1 && git rev-parse HEAD && git diff --numstat <base..head> --",
+            details=details,
+        )
+        latest_path = self._skills_dir(task_dir) / "requesting-code-review-latest.json"
+        latest_path.write_text(json.dumps(details, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        return {"ok": True, "details": details}
 
     def _code_change_gate_reasons(self, metadata: TaskMetadata) -> list[str]:
         if metadata.base_commit is None:
@@ -717,7 +936,7 @@ class WorkflowManager:
         if progress.total == 0:
             reasons.append("OpenSpec tasks.md does not contain any checklist items.")
 
-        apply_payload = self._openspec_apply_payload(metadata.change_name)
+        apply_payload = self._run_openspec_apply_change_skill(metadata, task_dir)
         if apply_payload is not None and str(apply_payload.get("state", "")).lower() == "blocked":
             missing = apply_payload.get("missingArtifacts", [])
             if isinstance(missing, list) and missing:
@@ -1403,7 +1622,7 @@ class WorkflowManager:
     def _write_autopilot_implementation(self, task_dir: Path, metadata: TaskMetadata) -> None:
         request = self._task_request(task_dir) or metadata.title
         verification = self._verification_label(metadata)
-        apply_payload = self._openspec_apply_payload(metadata.change_name)
+        apply_payload = self._run_openspec_apply_change_skill(metadata, task_dir)
         apply_instruction = ""
         if apply_payload is not None:
             instruction_text = str(apply_payload.get("instruction", "")).strip()

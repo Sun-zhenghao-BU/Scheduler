@@ -59,6 +59,8 @@ class RecordingRunner:
             return CommandResult(returncode=0, stdout='{"summary":{"totals":{"failed":0}}}', stderr="")
         if command == ["git", "rev-parse", "HEAD"]:
             return CommandResult(returncode=0, stdout="deadbeef\n", stderr="")
+        if command == ["git", "rev-parse", "HEAD~1"]:
+            return CommandResult(returncode=0, stdout="cafebabe\n", stderr="")
         if len(command) >= 4 and command[:3] == ["git", "diff", "--name-only"]:
             return CommandResult(returncode=0, stdout="src/scheduler_automation/workflow.py\n", stderr="")
         if len(command) >= 4 and command[:3] == ["git", "diff", "--numstat"]:
@@ -388,6 +390,36 @@ class WorkflowManagerTests(unittest.TestCase):
             self.assertIn("python -m unittest discover -s tests -v", result.command)
             self.assertIn("openspec validate --type change", result.command)
             self.assertIn("verification ok", implementation_path.read_text(encoding="utf-8"))
+
+    def test_skill_executions_recorded_for_core_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(root, command_runner=RecordingRunner(root))
+            metadata = manager.create_task("Skill trace workflow", "Run skill flow end to end")
+            self._write_spec_artifacts(root, metadata.change_name, "- [x] done\n")
+            self._write_local_spec_summary(root, metadata.task_id)
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            self._write_implementation_note(root, metadata.task_id, "Implemented end-to-end flow.\n")
+            manager.verify_task(metadata.task_id)
+            manager.advance_task(metadata.task_id, "review")
+            review_path = root / "tasks" / metadata.task_id / "review.md"
+            review_path.write_text(
+                "# Review\n\n"
+                "## Summary\n\n"
+                "Review completed.\n\n"
+                "## Findings\n\n"
+                "None.\n",
+                encoding="utf-8",
+            )
+            manager.review_task(metadata.task_id)
+
+            runs = manager.skill_executions(metadata.task_id, limit=50)
+            skills = {str(item.get("skill")) for item in runs}
+            self.assertIn("brainstorming", skills)
+            self.assertIn("openspec-apply-change", skills)
+            self.assertIn("openspec-verify-change", skills)
+            self.assertIn("requesting-code-review", skills)
 
     def test_review_gate_requires_real_code_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -771,6 +803,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("timeline", detail["task"])
             self.assertIn("conclusion", detail["task"])
             self.assertIn("skill_pipeline", detail["task"])
+            self.assertIn("skill_executions", detail["task"])
             self.assertTrue(any(skill["skill"] == "brainstorming" for skill in detail["task"]["skill_pipeline"]))
 
     def test_dashboard_root_returns_html(self) -> None:
@@ -800,6 +833,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn('id="task-list"', html)
             self.assertIn("stage-flow", html)
             self.assertIn("Skill Pipeline", html)
+            self.assertIn("Skill Executions", html)
 
     def test_dashboard_missing_task_returns_404(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

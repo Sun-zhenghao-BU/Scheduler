@@ -76,6 +76,7 @@ class DashboardApp:
                 "stage_order": list(STAGES),
                 "timeline": self._read_timeline(task_dir / "journal.md"),
                 "skill_pipeline": self._skill_pipeline(metadata, task_dir),
+                "skill_executions": self.manager.skill_executions(task_id, limit=20),
                 "conclusion": conclusion,
                 "status": state["label"],
                 "status_tone": state["tone"],
@@ -163,9 +164,10 @@ function renderTaskList(tasks){const panel=document.getElementById('task-list');
 function artifactsHtml(items){if(!items.length)return '<div>No artifacts</div>';return items.map(i=>`<details><summary>${i.path}</summary><pre>${i.content}</pre></details>`).join('');}
 function stageProgressHtml(items){if(!items||!items.length)return '<div>No stage data</div>';return `<div class="stage-flow">${items.map((s,i)=>`<div class="stage-node ${s.state}"><span class="dot"></span><span class="label">${s.stage}</span>${i<items.length-1?'<span class="line"></span>':''}</div>`).join('')}</div>`;}
 function skillPipelineHtml(items){if(!items||!items.length)return '<div>No skill evidence</div>';return `<ul>${items.map(s=>`<li><b>${s.skill}</b> (${s.stage}) - ${s.status}: ${s.evidence}</li>`).join('')}</ul>`;}
+function skillExecutionsHtml(items){if(!items||!items.length)return '<div>No skill executions recorded.</div>';return `<ul>${items.map(s=>`<li><small>${s.timestamp||''} | ${s.stage||''}</small><div><b>${s.skill||'unknown'}</b> - ${(s.ok?'ok':'failed')}</div><div>${s.summary||''}</div><div><code>${s.command||''}</code></div></li>`).join('')}</ul>`;}
 function compareHtml(compare){if(!compare||!compare.available){return `<div>${compare&&compare.reason?compare.reason:'Compare not available'}</div><p><small>Click "Set Baseline" to start clean compare for this task.</small></p>`;}const committed=compare.related_committed_files.length?`<ul>${compare.related_committed_files.map(f=>`<li>${f.path} (+${f.added}/-${f.deleted})</li>`).join('')}</ul>`:'<div>No related committed delta in range.</div>';const working=compare.related_working_tree.length?`<ul>${compare.related_working_tree.map(f=>`<li>${f.status} ${f.path}</li>`).join('')}</ul>`:'<div>Related working tree clean.</div>';const hiddenCommitted=compare.hidden_committed_count?`<p><small>${compare.hidden_committed_count} unrelated committed file(s) hidden.</small></p>`:'';const hiddenWorking=compare.hidden_working_count?`<p><small>${compare.hidden_working_count} unrelated working tree file(s) hidden.</small></p>`:'';return `<p><b>Range:</b> ${compare.commit_range}</p><p><b>Totals:</b> ${compare.totals.files} files, +${compare.totals.added}/-${compare.totals.deleted}</p><h5>Related committed changes</h5>${committed}${hiddenCommitted}<h5>Related working tree</h5>${working}${hiddenWorking}`;}
 function completionHtml(completion){if(!completion){return '<div>Not completed yet.</div>';}const checks=completion.checks?`<p>Archive exists: ${completion.checks.archive_exists?'yes':'no'}</p><p>Metadata archived: ${completion.checks.metadata_archived?'yes':'no'}</p>`:'';const sha=completion.commit_sha||'unavailable';return `<p><b>Completed at:</b> ${completion.completed_at}</p><p><b>Archive:</b> ${completion.archive_path}</p><p><b>Commit:</b> ${sha}</p><p><b>Evidence file:</b> ${completion.path}</p>${checks}`;}
-function renderTaskDetail(task){const blocked=task.blocked_reasons.length?`<ul>${task.blocked_reasons.map(r=>`<li>${r}</li>`).join('')}</ul>`:'<div>No blockers</div>';const suggested=task.suggested_actions.length?`<ol>${task.suggested_actions.map(r=>`<li>${r}</li>`).join('')}</ol>`:'<div>No manual step required</div>';const timeline=task.timeline.length?task.timeline.map(e=>`<div><small>${e.timestamp} | ${e.stage}</small><div>${e.message}</div></div>`).join(''):'<div>No timeline</div>';const findings=task.review_findings.length?task.review_findings.map(f=>`<div><small>${f.finding_id} | ${f.severity} | ${f.status}</small><div>${f.summary}</div></div>`).join(''):'<div>No findings</div>';const skills=skillPipelineHtml(task.skill_pipeline);document.getElementById('task-detail').innerHTML=`<div><h2>${task.title}</h2><div>${task.task_id}</div><span class="pill ${task.status_tone==='ok'?'ok':task.status_tone==='warn'?'warn':'bad'}">${task.status}</span><p><b>Stage:</b> ${task.current_stage} | <b>Change:</b> ${task.change_name}</p><h3>${task.conclusion.title}</h3><p>${task.conclusion.body}</p></div><div class="grid"><div><div class="box"><h4>Stage Progress</h4>${stageProgressHtml(task.stage_progress)}</div><div class="box"><h4>Skill Pipeline</h4>${skills}</div><div class="box"><h4>Recommended Steps</h4>${suggested}</div><div class="box"><h4>Execution Timeline</h4>${timeline}</div><div class="box"><h4>Stage Artifacts</h4>${artifactsHtml(task.artifacts)}</div></div><div><div class="box"><h4>Quality</h4><p>Verification: ${task.verification}</p><p>Open high findings: ${task.high_findings_open}</p><p>OpenSpec tasks: ${task.progress.complete}/${task.progress.total}</p></div><div class="box"><h4>Review Findings</h4>${findings}</div><div class="box"><h4>Code Delta vs Baseline</h4>${compareHtml(task.compare)}</div><div class="box"><h4>Completion Evidence</h4>${completionHtml(task.completion)}</div><div class="box"><h4>Blockers</h4>${blocked}</div></div></div>`;document.getElementById('continue-step').disabled=state.busy||!task.can_step;document.getElementById('run-verify').disabled=state.busy||!task.can_verify;document.getElementById('record-review').disabled=state.busy||!task.can_review;document.getElementById('continue-autopilot').disabled=state.busy||!task.can_autopilot;document.getElementById('set-baseline').disabled=state.busy;document.getElementById('complete-task').disabled=state.busy||!task.can_complete;}
+function renderTaskDetail(task){const blocked=task.blocked_reasons.length?`<ul>${task.blocked_reasons.map(r=>`<li>${r}</li>`).join('')}</ul>`:'<div>No blockers</div>';const suggested=task.suggested_actions.length?`<ol>${task.suggested_actions.map(r=>`<li>${r}</li>`).join('')}</ol>`:'<div>No manual step required</div>';const timeline=task.timeline.length?task.timeline.map(e=>`<div><small>${e.timestamp} | ${e.stage}</small><div>${e.message}</div></div>`).join(''):'<div>No timeline</div>';const findings=task.review_findings.length?task.review_findings.map(f=>`<div><small>${f.finding_id} | ${f.severity} | ${f.status}</small><div>${f.summary}</div></div>`).join(''):'<div>No findings</div>';const skills=skillPipelineHtml(task.skill_pipeline);const skillRuns=skillExecutionsHtml(task.skill_executions);document.getElementById('task-detail').innerHTML=`<div><h2>${task.title}</h2><div>${task.task_id}</div><span class="pill ${task.status_tone==='ok'?'ok':task.status_tone==='warn'?'warn':'bad'}">${task.status}</span><p><b>Stage:</b> ${task.current_stage} | <b>Change:</b> ${task.change_name}</p><h3>${task.conclusion.title}</h3><p>${task.conclusion.body}</p></div><div class="grid"><div><div class="box"><h4>Stage Progress</h4>${stageProgressHtml(task.stage_progress)}</div><div class="box"><h4>Skill Pipeline</h4>${skills}</div><div class="box"><h4>Skill Executions</h4>${skillRuns}</div><div class="box"><h4>Recommended Steps</h4>${suggested}</div><div class="box"><h4>Execution Timeline</h4>${timeline}</div><div class="box"><h4>Stage Artifacts</h4>${artifactsHtml(task.artifacts)}</div></div><div><div class="box"><h4>Quality</h4><p>Verification: ${task.verification}</p><p>Open high findings: ${task.high_findings_open}</p><p>OpenSpec tasks: ${task.progress.complete}/${task.progress.total}</p></div><div class="box"><h4>Review Findings</h4>${findings}</div><div class="box"><h4>Code Delta vs Baseline</h4>${compareHtml(task.compare)}</div><div class="box"><h4>Completion Evidence</h4>${completionHtml(task.completion)}</div><div class="box"><h4>Blockers</h4>${blocked}</div></div></div>`;document.getElementById('continue-step').disabled=state.busy||!task.can_step;document.getElementById('run-verify').disabled=state.busy||!task.can_verify;document.getElementById('record-review').disabled=state.busy||!task.can_review;document.getElementById('continue-autopilot').disabled=state.busy||!task.can_autopilot;document.getElementById('set-baseline').disabled=state.busy;document.getElementById('complete-task').disabled=state.busy||!task.can_complete;}
 async function loadTaskList(){const p=await fetchJson('/api/tasks');renderTaskList(p.tasks||[]);}
 async function loadTaskDetail(){if(!state.selectedTaskId)return;const p=await fetchJson(`/api/tasks/${encodeURIComponent(state.selectedTaskId)}`);renderTaskDetail(p.task);}
 async function refresh(){try{await loadTaskList();await loadTaskDetail();}catch(e){document.getElementById('task-detail').innerHTML=e.message;}}
@@ -466,74 +468,78 @@ refresh();setInterval(refresh,5000);
     def _skill_pipeline(self, metadata: TaskMetadata, task_dir: Path) -> list[dict[str, str]]:
         completed = self._is_completed(metadata)
         current_index = STAGES.index(metadata.current_stage)
+        executions = self.manager.skill_executions(metadata.task_id, limit=50)
+
+        def latest_run(skill_name: str) -> dict[str, object] | None:
+            for item in executions:
+                if str(item.get("skill", "")) == skill_name:
+                    return item
+            return None
 
         def stage_reached(stage: str) -> bool:
             return completed or current_index >= STAGES.index(stage)
 
-        def read_text(path: Path) -> str:
-            if not path.exists():
-                return ""
-            return path.read_text(encoding="utf-8")
-
-        implementation_text = read_text(task_dir / "implementation.md")
-        review_text = read_text(task_dir / "review.md")
-
-        brainstorming_done = self.manager._section_has_meaningful_content(task_dir / "spec.md", "## Summary")
-        apply_done = "openspec-apply-change" in implementation_text.lower()
-        verify_done = metadata.last_verified_at is not None
-        review_done = metadata.last_reviewed_at is not None and "requesting-code-review" in review_text.lower()
+        def from_run(skill_name: str) -> tuple[str | None, str | None]:
+            run = latest_run(skill_name)
+            if run is None:
+                return None, None
+            status = "done" if bool(run.get("ok")) else "failed"
+            timestamp = str(run.get("timestamp", "")).strip()
+            summary = str(run.get("summary", "")).strip()
+            evidence = f"{summary} ({timestamp})" if timestamp else summary
+            return status, evidence
 
         skills = [
             {
                 "skill": "brainstorming",
                 "stage": "spec",
-                "status": "done" if brainstorming_done else ("missing" if stage_reached("spec") else "pending"),
-                "evidence": (
-                    "spec.md summary is populated."
-                    if brainstorming_done
-                    else ("spec.md summary is still placeholder." if stage_reached("spec") else "Waiting for spec stage.")
-                ),
+                "status": from_run("brainstorming")[0]
+                or ("missing" if stage_reached("spec") else "pending"),
+                "evidence": from_run("brainstorming")[1]
+                or ("No brainstorming execution recorded." if stage_reached("spec") else "Waiting for spec stage."),
             },
             {
                 "skill": "openspec-apply-change",
                 "stage": "implement",
-                "status": "done" if apply_done else ("missing" if stage_reached("implement") else "pending"),
-                "evidence": (
-                    "implementation.md contains OpenSpec apply instruction snapshot."
-                    if apply_done
-                    else (
-                        "No OpenSpec apply execution evidence in implementation.md."
-                        if stage_reached("implement")
-                        else "Waiting for implement stage."
-                    )
+                "status": from_run("openspec-apply-change")[0]
+                or ("missing" if stage_reached("implement") else "pending"),
+                "evidence": from_run("openspec-apply-change")[1]
+                or (
+                    "No openspec-apply-change execution recorded."
+                    if stage_reached("implement")
+                    else "Waiting for implement stage."
                 ),
             },
             {
                 "skill": "openspec-verify-change",
                 "stage": "review",
-                "status": (
+                "status": from_run("openspec-verify-change")[0]
+                or (
                     "done"
-                    if verify_done and metadata.last_verification_passed is True
-                    else ("failed" if verify_done else ("missing" if stage_reached("review") else "pending"))
+                    if metadata.last_verification_passed is True
+                    else (
+                        "failed"
+                        if metadata.last_verified_at is not None
+                        else ("missing" if stage_reached("review") else "pending")
+                    )
                 ),
-                "evidence": (
+                "evidence": from_run("openspec-verify-change")[1]
+                or (
                     f"Latest verification at {metadata.last_verified_at}."
-                    if verify_done
+                    if metadata.last_verified_at is not None
                     else ("Verification has not run yet." if stage_reached("review") else "Waiting for review stage.")
                 ),
             },
             {
                 "skill": "requesting-code-review",
                 "stage": "review",
-                "status": "done" if review_done else ("missing" if stage_reached("review") else "pending"),
-                "evidence": (
-                    "review.md contains requesting-code-review checklist trace."
-                    if review_done
-                    else (
-                        "Review trace missing in review.md."
-                        if stage_reached("review")
-                        else "Waiting for review stage."
-                    )
+                "status": from_run("requesting-code-review")[0]
+                or ("missing" if stage_reached("review") else "pending"),
+                "evidence": from_run("requesting-code-review")[1]
+                or (
+                    "No requesting-code-review execution recorded."
+                    if stage_reached("review")
+                    else "Waiting for review stage."
                 ),
             },
         ]
