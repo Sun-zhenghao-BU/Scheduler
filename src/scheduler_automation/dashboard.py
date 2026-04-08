@@ -38,6 +38,8 @@ class DashboardApp:
     def build_task_detail_payload(self, task_id: str) -> dict[str, object]:
         snapshot = self.manager.task_snapshot(task_id)
         metadata, task_dir = self.manager.get_task(task_id)
+        completion = self.manager.completion_evidence(task_id)
+        compare = self.manager.task_compare(task_id)
         completed = self._is_completed(metadata)
         state = self._task_state(metadata.current_stage, snapshot.blocked_reasons, completed)
         conclusion = self._task_conclusion(snapshot.next_action, state["label"], snapshot.blocked_reasons, completed)
@@ -55,6 +57,7 @@ class DashboardApp:
                 "task_id": metadata.task_id,
                 "title": metadata.title,
                 "current_stage": metadata.current_stage,
+                "stage_progress": self._stage_progress(metadata.current_stage, completed),
                 "change_name": metadata.change_name,
                 "change_path": metadata.change_path,
                 "next_action": snapshot.next_action,
@@ -74,6 +77,8 @@ class DashboardApp:
                 "status_tone": state["tone"],
                 "review_findings": findings,
                 "artifacts": self._artifact_preview(metadata.change_name, task_dir),
+                "completion": completion,
+                "compare": compare,
                 "can_step": not completed and metadata.current_stage != "release",
                 "can_autopilot": not completed,
                 "can_verify": not completed and metadata.current_stage in {"implement", "fix"},
@@ -109,6 +114,7 @@ textarea{min-height:80px;min-width:320px}button{cursor:pointer}.pill{display:inl
   <button id="run-verify">Run Verify</button>
   <button id="record-review">Record Review</button>
   <button id="continue-autopilot">Continue Autopilot</button>
+  <button id="set-baseline">Set Baseline</button>
   <button id="complete-task">Archive, Commit, Push</button>
 </div>
 <div id="flash"></div>
@@ -118,10 +124,13 @@ textarea{min-height:80px;min-width:320px}button{cursor:pointer}.pill{display:inl
 const state={selectedTaskId:null,busy:false};
 async function fetchJson(url,opts={}){const r=await fetch(url,{cache:'no-store',...opts});const t=await r.text();const p=t?JSON.parse(t):{};if(!r.ok)throw new Error(p.error||`Request failed: ${r.status}`);return p;}
 function flash(m){document.getElementById('flash').textContent=m||'';}
-function setBusy(v){state.busy=v;['create-task','new-task-title','new-task-request','new-task-autopilot','continue-step','run-verify','record-review','continue-autopilot','complete-task','refresh-task','task-selector'].forEach(id=>{document.getElementById(id).disabled=v;});}
+function setBusy(v){state.busy=v;['create-task','new-task-title','new-task-request','new-task-autopilot','continue-step','run-verify','record-review','continue-autopilot','set-baseline','complete-task','refresh-task','task-selector'].forEach(id=>{document.getElementById(id).disabled=v;});}
 function renderTaskSelector(tasks){const s=document.getElementById('task-selector');if(!tasks.length){state.selectedTaskId=null;s.innerHTML='';document.getElementById('task-detail').innerHTML='No tasks found yet.';return;}if(!state.selectedTaskId||!tasks.some(t=>t.task_id===state.selectedTaskId)){state.selectedTaskId=tasks[0].task_id;}s.innerHTML=tasks.map(t=>`<option value="${t.task_id}" ${t.task_id===state.selectedTaskId?'selected':''}>${t.title} (${t.current_stage})</option>`).join('');}
 function artifactsHtml(items){if(!items.length)return '<div>No artifacts</div>';return items.map(i=>`<details><summary>${i.path}</summary><pre>${i.content}</pre></details>`).join('');}
-function renderTaskDetail(task){const blocked=task.blocked_reasons.length?`<ul>${task.blocked_reasons.map(r=>`<li>${r}</li>`).join('')}</ul>`:'<div>No blockers</div>';const suggested=task.suggested_actions.length?`<ol>${task.suggested_actions.map(r=>`<li>${r}</li>`).join('')}</ol>`:'<div>No manual step required</div>';const timeline=task.timeline.length?task.timeline.map(e=>`<div><small>${e.timestamp} | ${e.stage}</small><div>${e.message}</div></div>`).join(''):'<div>No timeline</div>';const findings=task.review_findings.length?task.review_findings.map(f=>`<div><small>${f.finding_id} | ${f.severity} | ${f.status}</small><div>${f.summary}</div></div>`).join(''):'<div>No findings</div>';document.getElementById('task-detail').innerHTML=`<div><h2>${task.title}</h2><div>${task.task_id}</div><span class="pill ${task.status_tone==='ok'?'ok':task.status_tone==='warn'?'warn':'bad'}">${task.status}</span><p><b>Stage:</b> ${task.current_stage} | <b>Change:</b> ${task.change_name}</p><h3>${task.conclusion.title}</h3><p>${task.conclusion.body}</p></div><div class="grid"><div><div class="box"><h4>Recommended Steps</h4>${suggested}</div><div class="box"><h4>Execution Timeline</h4>${timeline}</div><div class="box"><h4>Stage Artifacts</h4>${artifactsHtml(task.artifacts)}</div></div><div><div class="box"><h4>Quality</h4><p>Verification: ${task.verification}</p><p>Open high findings: ${task.high_findings_open}</p><p>OpenSpec tasks: ${task.progress.complete}/${task.progress.total}</p></div><div class="box"><h4>Review Findings</h4>${findings}</div><div class="box"><h4>Blockers</h4>${blocked}</div></div></div>`;document.getElementById('continue-step').disabled=state.busy||!task.can_step;document.getElementById('run-verify').disabled=state.busy||!task.can_verify;document.getElementById('record-review').disabled=state.busy||!task.can_review;document.getElementById('continue-autopilot').disabled=state.busy||!task.can_autopilot;document.getElementById('complete-task').disabled=state.busy||!task.can_complete;}
+function stageProgressHtml(items){if(!items||!items.length)return '<div>No stage data</div>';return `<div class="row">${items.map(s=>`<span class="pill ${s.state==='done'?'ok':s.state==='current'?'warn':'bad'}">${s.stage}</span>`).join('')}</div>`;}
+function compareHtml(compare){if(!compare||!compare.available){return `<div>${compare&&compare.reason?compare.reason:'Compare not available'}</div><p><small>Click "Set Baseline" to start clean compare for this task.</small></p>`;}const committed=compare.related_committed_files.length?`<ul>${compare.related_committed_files.map(f=>`<li>${f.path} (+${f.added}/-${f.deleted})</li>`).join('')}</ul>`:'<div>No related committed delta in range.</div>';const working=compare.related_working_tree.length?`<ul>${compare.related_working_tree.map(f=>`<li>${f.status} ${f.path}</li>`).join('')}</ul>`:'<div>Related working tree clean.</div>';const hiddenCommitted=compare.hidden_committed_count?`<p><small>${compare.hidden_committed_count} unrelated committed file(s) hidden.</small></p>`:'';const hiddenWorking=compare.hidden_working_count?`<p><small>${compare.hidden_working_count} unrelated working tree file(s) hidden.</small></p>`:'';return `<p><b>Range:</b> ${compare.commit_range}</p><p><b>Totals:</b> ${compare.totals.files} files, +${compare.totals.added}/-${compare.totals.deleted}</p><h5>Related committed changes</h5>${committed}${hiddenCommitted}<h5>Related working tree</h5>${working}${hiddenWorking}`;}
+function completionHtml(completion){if(!completion){return '<div>Not completed yet.</div>';}const checks=completion.checks?`<p>Archive exists: ${completion.checks.archive_exists?'yes':'no'}</p><p>Metadata archived: ${completion.checks.metadata_archived?'yes':'no'}</p>`:'';const sha=completion.commit_sha||'unavailable';return `<p><b>Completed at:</b> ${completion.completed_at}</p><p><b>Archive:</b> ${completion.archive_path}</p><p><b>Commit:</b> ${sha}</p><p><b>Evidence file:</b> ${completion.path}</p>${checks}`;}
+function renderTaskDetail(task){const blocked=task.blocked_reasons.length?`<ul>${task.blocked_reasons.map(r=>`<li>${r}</li>`).join('')}</ul>`:'<div>No blockers</div>';const suggested=task.suggested_actions.length?`<ol>${task.suggested_actions.map(r=>`<li>${r}</li>`).join('')}</ol>`:'<div>No manual step required</div>';const timeline=task.timeline.length?task.timeline.map(e=>`<div><small>${e.timestamp} | ${e.stage}</small><div>${e.message}</div></div>`).join(''):'<div>No timeline</div>';const findings=task.review_findings.length?task.review_findings.map(f=>`<div><small>${f.finding_id} | ${f.severity} | ${f.status}</small><div>${f.summary}</div></div>`).join(''):'<div>No findings</div>';document.getElementById('task-detail').innerHTML=`<div><h2>${task.title}</h2><div>${task.task_id}</div><span class="pill ${task.status_tone==='ok'?'ok':task.status_tone==='warn'?'warn':'bad'}">${task.status}</span><p><b>Stage:</b> ${task.current_stage} | <b>Change:</b> ${task.change_name}</p><h3>${task.conclusion.title}</h3><p>${task.conclusion.body}</p></div><div class="grid"><div><div class="box"><h4>Stage Progress</h4>${stageProgressHtml(task.stage_progress)}</div><div class="box"><h4>Recommended Steps</h4>${suggested}</div><div class="box"><h4>Execution Timeline</h4>${timeline}</div><div class="box"><h4>Stage Artifacts</h4>${artifactsHtml(task.artifacts)}</div></div><div><div class="box"><h4>Quality</h4><p>Verification: ${task.verification}</p><p>Open high findings: ${task.high_findings_open}</p><p>OpenSpec tasks: ${task.progress.complete}/${task.progress.total}</p></div><div class="box"><h4>Review Findings</h4>${findings}</div><div class="box"><h4>Code Delta vs Baseline</h4>${compareHtml(task.compare)}</div><div class="box"><h4>Completion Evidence</h4>${completionHtml(task.completion)}</div><div class="box"><h4>Blockers</h4>${blocked}</div></div></div>`;document.getElementById('continue-step').disabled=state.busy||!task.can_step;document.getElementById('run-verify').disabled=state.busy||!task.can_verify;document.getElementById('record-review').disabled=state.busy||!task.can_review;document.getElementById('continue-autopilot').disabled=state.busy||!task.can_autopilot;document.getElementById('set-baseline').disabled=state.busy;document.getElementById('complete-task').disabled=state.busy||!task.can_complete;}
 async function loadTaskList(){const p=await fetchJson('/api/tasks');renderTaskSelector(p.tasks);}
 async function loadTaskDetail(){if(!state.selectedTaskId)return;const p=await fetchJson(`/api/tasks/${encodeURIComponent(state.selectedTaskId)}`);renderTaskDetail(p.task);}
 async function refresh(){try{await loadTaskList();await loadTaskDetail();}catch(e){document.getElementById('task-detail').innerHTML=e.message;}}
@@ -134,6 +143,7 @@ document.getElementById('continue-step').addEventListener('click',()=>runAction(
 document.getElementById('run-verify').addEventListener('click',()=>runAction('verify','Running verification...'));
 document.getElementById('record-review').addEventListener('click',()=>runAction('review','Recording review...'));
 document.getElementById('continue-autopilot').addEventListener('click',()=>runAction('autopilot','Running autopilot...'));
+document.getElementById('set-baseline').addEventListener('click',()=>runAction('baseline','Setting baseline commit...'));
 document.getElementById('complete-task').addEventListener('click',()=>{if(confirm('This will archive the change, commit, and push to the remote. Continue?'))runAction('complete','Completing task...');});
 refresh();setInterval(refresh,5000);
 </script></body></html>
@@ -189,7 +199,7 @@ refresh();setInterval(refresh,5000);
             return 400, "application/json; charset=utf-8", json.dumps({"error": str(error)}).encode("utf-8")
 
     def _handle_action_request(self, path: str) -> tuple[int, str, bytes]:
-        match = re.match(r"^/api/tasks/(?P<task_id>[^/]+)/(?P<action>step|verify|review|autopilot|complete)$", path)
+        match = re.match(r"^/api/tasks/(?P<task_id>[^/]+)/(?P<action>step|verify|review|autopilot|baseline|complete)$", path)
         if not match:
             return 404, "application/json; charset=utf-8", json.dumps({"error": "Not found"}).encode("utf-8")
         task_id = unquote(match.group("task_id"))
@@ -233,6 +243,19 @@ refresh();setInterval(refresh,5000);
                         "task": task_payload,
                     }
                 )
+            if action == "baseline":
+                metadata = self.manager.set_task_baseline(task_id)
+                task_payload = self.build_task_detail_payload(task_id)["task"]
+                return self._ok_json(
+                    {
+                        "result": {
+                            "action": "baseline",
+                            "base_commit": metadata.base_commit,
+                            "message": f"Baseline set to {metadata.base_commit}.",
+                        },
+                        "task": task_payload,
+                    }
+                )
             result = self.manager.complete_task(task_id)
             task_payload = self.build_task_detail_payload(task_id)["task"]
             return self._ok_json(
@@ -241,6 +264,8 @@ refresh();setInterval(refresh,5000);
                         "action": "complete",
                         "archive_path": result.archive_path,
                         "commit_message": result.commit_message,
+                        "commit_sha": result.commit_sha,
+                        "evidence_path": result.evidence_path,
                         "message": f"Task completed and pushed. Archive: {result.archive_path}",
                     },
                     "task": task_payload,
@@ -374,6 +399,21 @@ refresh();setInterval(refresh,5000);
             "title": "Autopilot can continue",
             "body": f"The next planned action is `{next_action}`. Use Continue One Step or Continue Autopilot.",
         }
+
+    def _stage_progress(self, current_stage: str, completed: bool) -> list[dict[str, str]]:
+        if completed:
+            return [{"stage": stage, "state": "done"} for stage in STAGES]
+        current_index = STAGES.index(current_stage)
+        progress: list[dict[str, str]] = []
+        for index, stage in enumerate(STAGES):
+            if index < current_index:
+                state = "done"
+            elif index == current_index:
+                state = "current"
+            else:
+                state = "pending"
+            progress.append({"stage": stage, "state": state})
+        return progress
 
     def _read_timeline(self, journal_path: Path) -> list[dict[str, str]]:
         if not journal_path.exists():

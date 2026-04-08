@@ -29,6 +29,8 @@ class RecordingRunner:
             change_dir = self.root / "openspec" / "changes" / change_name
             change_dir.mkdir(parents=True, exist_ok=True)
             (change_dir / ".openspec.yaml").write_text("schema: spec-driven\n", encoding="utf-8")
+        if command == ["git", "rev-parse", "HEAD"]:
+            return CommandResult(returncode=0, stdout="deadbeef\n", stderr="")
 
         if self.results:
             return self.results.pop(0)
@@ -404,12 +406,19 @@ class WorkflowManagerTests(unittest.TestCase):
 
             archive_dir = root / result.archive_path
             self.assertTrue(archive_dir.exists())
-            self.assertEqual(runner.commands[-3], ["git", "add", "."])
-            self.assertEqual(
-                runner.commands[-2],
+            self.assertIn(["git", "add", "."], runner.commands)
+            self.assertIn(
                 ["git", "commit", "-m", f"chore: complete {metadata.task_id} ({metadata.change_name})"],
+                runner.commands,
             )
-            self.assertEqual(runner.commands[-1], ["git", "push", "--set-upstream", "origin", "HEAD"])
+            self.assertIn(["git", "push", "--set-upstream", "origin", "HEAD"], runner.commands)
+            completion_path = root / "tasks" / metadata.task_id / "completion.json"
+            self.assertTrue(completion_path.exists())
+            completion = json.loads(completion_path.read_text(encoding="utf-8"))
+            self.assertEqual(completion["task_id"], metadata.task_id)
+            self.assertEqual(completion["archive_path"], result.archive_path)
+            self.assertEqual(completion["commit_message"], result.commit_message)
+            self.assertTrue(completion["commands"]["git_push"]["ok"])
 
     def _write_spec_artifacts(self, root: Path, change_name: str, tasks_content: str) -> None:
         change_dir = root / "openspec" / "changes" / change_name
@@ -604,6 +613,7 @@ class DashboardTests(unittest.TestCase):
             html = body.decode("utf-8")
             self.assertIn("continue-autopilot", html)
             self.assertIn("complete-task", html)
+            self.assertIn("set-baseline", html)
             self.assertIn("new-task-title", html)
             self.assertIn("create-task", html)
 
@@ -757,6 +767,105 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("task_id", payload["task"])
             self.assertEqual(payload["result"]["action"], "create_task")
             self.assertIn(payload["task"]["current_stage"], {"review", "release", "fix"})
+
+    def test_dashboard_detail_includes_git_compare_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            rev_parse_calls = {"count": 0}
+
+            def command_runner(command: list[str], cwd: Path | None = None) -> CommandResult:
+                if command[:3] in (["openspec", "new", "change"], ["openspec.cmd", "new", "change"]):
+                    change_name = command[3]
+                    change_dir = root / "openspec" / "changes" / change_name
+                    change_dir.mkdir(parents=True, exist_ok=True)
+                    (change_dir / ".openspec.yaml").write_text("schema: spec-driven\n", encoding="utf-8")
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                if command == ["git", "rev-parse", "HEAD"]:
+                    rev_parse_calls["count"] += 1
+                    sha = "base123" if rev_parse_calls["count"] == 1 else "head456"
+                    return CommandResult(returncode=0, stdout=f"{sha}\n", stderr="")
+                if command == ["git", "diff", "--numstat", "base123..head456", "--"]:
+                    return CommandResult(
+                        returncode=0,
+                        stdout="12\t3\tsrc/scheduler_automation/dashboard.py\n2\t0\ttests/test_workflow.py\n",
+                        stderr="",
+                    )
+                if command == ["git", "status", "--porcelain"]:
+                    return CommandResult(returncode=0, stdout=" M src/scheduler_automation/workflow.py\n", stderr="")
+                return CommandResult(returncode=0, stdout="", stderr="")
+
+            manager = WorkflowManager(
+                root,
+                command_runner=command_runner,
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+            metadata = manager.create_task("Compare dashboard", "Show git compare in dashboard")
+            app = DashboardApp(root, manager=manager)
+
+            detail = app.build_task_detail_payload(metadata.task_id)
+
+            compare = detail["task"]["compare"]
+            self.assertTrue(compare["available"])
+            self.assertEqual(compare["base_commit"], "base123")
+            self.assertEqual(compare["head_commit"], "head456")
+            self.assertEqual(compare["commit_range"], "base123..head456")
+            self.assertEqual(compare["baseline_source"], "task")
+            self.assertEqual(compare["totals"]["files"], 2)
+            self.assertEqual(compare["totals"]["added"], 14)
+            self.assertEqual(compare["totals"]["deleted"], 3)
+            self.assertEqual(compare["working_tree"][0]["path"], "src/scheduler_automation/workflow.py")
+            self.assertEqual(len(compare["related_committed_files"]), 2)
+            self.assertEqual(compare["hidden_committed_count"], 0)
+
+    def test_dashboard_compare_requires_explicit_task_baseline_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            def command_runner(command: list[str], cwd: Path | None = None) -> CommandResult:
+                if command[:3] in (["openspec", "new", "change"], ["openspec.cmd", "new", "change"]):
+                    change_name = command[3]
+                    change_dir = root / "openspec" / "changes" / change_name
+                    change_dir.mkdir(parents=True, exist_ok=True)
+                    (change_dir / ".openspec.yaml").write_text("schema: spec-driven\n", encoding="utf-8")
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                if command == ["git", "rev-parse", "HEAD"]:
+                    return CommandResult(returncode=0, stdout="head456\n", stderr="")
+                if command == ["git", "diff", "--numstat", "head456..head456", "--"]:
+                    return CommandResult(returncode=0, stdout="4\t1\tsrc/scheduler_automation/cli.py\n", stderr="")
+                if command == ["git", "status", "--porcelain"]:
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                return CommandResult(returncode=0, stdout="", stderr="")
+
+            manager = WorkflowManager(
+                root,
+                command_runner=command_runner,
+                artifact_generator=StubArtifactGenerator(),
+                confirm_write=lambda *_: True,
+            )
+            metadata = manager.create_task("Legacy compare", "Show compare for old task")
+            metadata_file = root / "tasks" / metadata.task_id / "metadata.json"
+            metadata_payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+            metadata_payload["base_commit"] = None
+            metadata_file.write_text(json.dumps(metadata_payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+            app = DashboardApp(root, manager=manager)
+
+            detail = app.build_task_detail_payload(metadata.task_id)
+
+            compare = detail["task"]["compare"]
+            self.assertFalse(compare["available"])
+            self.assertEqual(compare["baseline_source"], "none")
+            self.assertIn("baseline is missing", compare["reason"])
+            self.assertIsNone(compare["base_commit"])
+            self.assertEqual(compare["head_commit"], "head456")
+
+            status, content_type, body = app.handle_request("POST", f"/api/tasks/{metadata.task_id}/baseline")
+            payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(content_type, "application/json; charset=utf-8")
+            self.assertEqual(payload["result"]["action"], "baseline")
+            self.assertEqual(payload["result"]["base_commit"], "head456")
+            self.assertTrue(payload["task"]["compare"]["available"])
 
 
 if __name__ == "__main__":

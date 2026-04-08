@@ -65,6 +65,7 @@ class TaskMetadata:
     last_verification_passed: bool | None = None
     last_reviewed_at: str | None = None
     ready_for_release: bool = False
+    base_commit: str | None = None
 
 
 @dataclass
@@ -111,6 +112,8 @@ class TaskSnapshot:
 class CompletionResult:
     archive_path: str
     commit_message: str
+    commit_sha: str | None = None
+    evidence_path: str | None = None
 
 
 @dataclass
@@ -170,6 +173,7 @@ class WorkflowManager:
             updated_at=now,
             change_name=change_name,
             change_path=self._relative_to_root(change_dir),
+            base_commit=self._current_head_commit(),
         )
         self._write_metadata(task_dir, metadata)
 
@@ -315,24 +319,52 @@ class WorkflowManager:
 
         archive_path = self._archive_change(metadata.change_name)
         commit_message = f"chore: complete {metadata.task_id} ({metadata.change_name})"
-        self._append_release_record(task_dir / "release.md", archive_path, commit_message)
+        command_results: dict[str, dict[str, object]] = {}
 
         metadata.change_path = archive_path
         metadata.updated_at = utc_timestamp()
         metadata.ready_for_release = False
         self._write_metadata(task_dir, metadata)
 
-        for command in (
-            ["git", "add", "."],
-            ["git", "commit", "-m", commit_message],
-            ["git", "push", "--set-upstream", "origin", "HEAD"],
-        ):
+        commands = (
+            ("git_add", ["git", "add", "."]),
+            ("git_commit", ["git", "commit", "-m", commit_message]),
+            ("git_push", ["git", "push", "--set-upstream", "origin", "HEAD"]),
+        )
+        for label, command in commands:
             result = self.command_runner(command, self.root)
+            command_results[label] = {
+                "ok": result.returncode == 0,
+                "returncode": result.returncode,
+                "stderr": result.stderr.strip(),
+                "stdout": result.stdout.strip(),
+            }
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"Command failed: {' '.join(command)}")
 
+        commit_sha = self._current_head_commit()
+        completion_path = self._write_completion_evidence(
+            task_dir=task_dir,
+            metadata=metadata,
+            archive_path=archive_path,
+            commit_message=commit_message,
+            commit_sha=commit_sha,
+            command_results=command_results,
+        )
+        self._append_release_record(
+            task_dir / "release.md",
+            archive_path,
+            commit_message,
+            commit_sha,
+            self._relative_to_root(completion_path),
+        )
         self.append_log(task_id, "release", f"Completed task and archived {metadata.change_name}")
-        return CompletionResult(archive_path=archive_path, commit_message=commit_message)
+        return CompletionResult(
+            archive_path=archive_path,
+            commit_message=commit_message,
+            commit_sha=commit_sha,
+            evidence_path=self._relative_to_root(completion_path),
+        )
 
     def autopilot_task(self, task_id: str) -> AutopilotResult:
         actions: list[str] = []
@@ -477,6 +509,108 @@ class WorkflowManager:
             lines.extend(["", "Next-Step Blockers:"])
             lines.extend(f"- {reason}" for reason in snapshot.blocked_reasons)
         return "\n".join(lines)
+
+    def completion_evidence(self, task_id: str) -> dict[str, object] | None:
+        metadata, task_dir = self.get_task(task_id)
+        completion_path = task_dir / "completion.json"
+        if not completion_path.exists():
+            return None
+
+        payload = json.loads(completion_path.read_text(encoding="utf-8"))
+        archive_path = str(payload.get("archive_path", ""))
+        archive_exists = bool(archive_path) and (self.root / archive_path).exists()
+        payload["checks"] = {
+            "archive_exists": archive_exists,
+            "metadata_archived": "openspec/changes/archive/" in metadata.change_path,
+        }
+        payload["path"] = self._relative_to_root(completion_path)
+        return payload
+
+    def set_task_baseline(self, task_id: str, commit_sha: str | None = None) -> TaskMetadata:
+        metadata, task_dir = self.get_task(task_id)
+        target = (commit_sha or "").strip() or self._current_head_commit()
+        if not target:
+            raise RuntimeError("Unable to resolve git HEAD for baseline.")
+        metadata.base_commit = target
+        metadata.updated_at = utc_timestamp()
+        self._write_metadata(task_dir, metadata)
+        self.append_log(task_id, metadata.current_stage, f"Set baseline commit to {target}")
+        return self.get_task(task_id)[0]
+
+    def task_compare(self, task_id: str) -> dict[str, object]:
+        metadata, _task_dir = self.get_task(task_id)
+        base_commit = metadata.base_commit
+        head_commit = self._current_head_commit()
+        if not base_commit:
+            return {
+                "available": False,
+                "reason": "Task baseline is missing. Set baseline first to compare only this task's code delta.",
+                "base_commit": None,
+                "head_commit": head_commit,
+                "commit_range": None,
+                "baseline_source": "none",
+                "committed_files": [],
+                "related_committed_files": [],
+                "hidden_committed_count": 0,
+                "working_tree": [],
+                "related_working_tree": [],
+                "hidden_working_count": 0,
+                "totals": {"files": 0, "added": 0, "deleted": 0},
+            }
+        if not head_commit:
+            return {
+                "available": False,
+                "reason": "Unable to read current git HEAD.",
+                "base_commit": base_commit,
+                "head_commit": None,
+                "commit_range": None,
+                "baseline_source": "task",
+                "committed_files": [],
+                "related_committed_files": [],
+                "hidden_committed_count": 0,
+                "working_tree": [],
+                "related_working_tree": [],
+                "hidden_working_count": 0,
+                "totals": {"files": 0, "added": 0, "deleted": 0},
+            }
+
+        commit_range = f"{base_commit}..{head_commit}"
+        diff_result = self.command_runner(["git", "diff", "--numstat", commit_range, "--"], self.root)
+        committed_files = self._parse_numstat(diff_result.stdout) if diff_result.returncode == 0 else []
+        related_committed = [
+            item
+            for item in committed_files
+            if self._is_task_related_path(str(item["path"]), task_id=metadata.task_id, change_name=metadata.change_name)
+        ]
+        status_result = self.command_runner(["git", "status", "--porcelain"], self.root)
+        working_tree = self._parse_porcelain(status_result.stdout) if status_result.returncode == 0 else []
+        related_working = [
+            item
+            for item in working_tree
+            if self._is_task_related_path(item["path"], task_id=metadata.task_id, change_name=metadata.change_name)
+        ]
+
+        return {
+            "available": diff_result.returncode == 0 and status_result.returncode == 0,
+            "reason": None
+            if diff_result.returncode == 0 and status_result.returncode == 0
+            else "Unable to compute git compare summary.",
+            "base_commit": base_commit,
+            "head_commit": head_commit,
+            "commit_range": commit_range,
+            "baseline_source": "task",
+            "committed_files": committed_files,
+            "related_committed_files": related_committed,
+            "hidden_committed_count": max(0, len(committed_files) - len(related_committed)),
+            "working_tree": working_tree,
+            "related_working_tree": related_working,
+            "hidden_working_count": max(0, len(working_tree) - len(related_working)),
+            "totals": {
+                "files": len(committed_files),
+                "added": sum(item["added"] for item in committed_files),
+                "deleted": sum(item["deleted"] for item in committed_files),
+            },
+        }
 
     def _gate_spec(self, metadata: TaskMetadata) -> list[str]:
         reasons: list[str] = []
@@ -763,13 +897,91 @@ class WorkflowManager:
                 handle.write(verification.stderr.rstrip() + "\n")
                 handle.write("```\n")
 
-    def _append_release_record(self, path: Path, archive_path: str, commit_message: str) -> None:
+    def _append_release_record(
+        self,
+        path: Path,
+        archive_path: str,
+        commit_message: str,
+        commit_sha: str | None,
+        evidence_path: str,
+    ) -> None:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(
                 "\n## Completion\n\n"
                 f"- Archived change: {archive_path}\n"
                 f"- Commit message: {commit_message}\n"
+                f"- Commit SHA: {commit_sha or 'unavailable'}\n"
+                f"- Completion evidence: {evidence_path}\n"
             )
+
+    def _write_completion_evidence(
+        self,
+        task_dir: Path,
+        metadata: TaskMetadata,
+        archive_path: str,
+        commit_message: str,
+        commit_sha: str | None,
+        command_results: dict[str, dict[str, object]],
+    ) -> Path:
+        completion_path = task_dir / "completion.json"
+        payload = {
+            "task_id": metadata.task_id,
+            "title": metadata.title,
+            "change_name": metadata.change_name,
+            "archive_path": archive_path,
+            "commit_message": commit_message,
+            "commit_sha": commit_sha,
+            "completed_at": utc_timestamp(),
+            "base_commit": metadata.base_commit,
+            "commands": command_results,
+        }
+        completion_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        return completion_path
+
+    def _parse_numstat(self, text: str) -> list[dict[str, int | str]]:
+        results: list[dict[str, int | str]] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            results.append(
+                {
+                    "path": parts[2],
+                    "added": self._safe_numstat(parts[0]),
+                    "deleted": self._safe_numstat(parts[1]),
+                }
+            )
+        return results
+
+    def _parse_porcelain(self, text: str) -> list[dict[str, str]]:
+        entries: list[dict[str, str]] = []
+        for raw_line in text.splitlines():
+            if len(raw_line) < 4:
+                continue
+            entries.append({"status": raw_line[:2], "path": raw_line[3:].strip()})
+        return entries
+
+    def _safe_numstat(self, value: str) -> int:
+        value = value.strip()
+        return int(value) if value.isdigit() else 0
+
+    def _is_task_related_path(self, path: str, task_id: str, change_name: str) -> bool:
+        normalized = path.replace("\\", "/").lower()
+        task_token = task_id.lower()
+        change_token = change_name.lower()
+        return (
+            task_token in normalized
+            or change_token in normalized
+            or normalized.startswith("src/scheduler_automation/")
+            or normalized.startswith("tests/test_workflow.py")
+            or normalized.startswith("docs/superpowers/")
+        )
 
     def _parse_review_findings(self, path: Path) -> list[ReviewFinding]:
         # review.md stays human-editable, so findings are parsed from a simple markdown format instead of JSON.
@@ -1004,6 +1216,13 @@ class WorkflowManager:
 
     def _task_files(self, task_dir: Path) -> Iterable[Path]:
         return sorted(path for path in task_dir.iterdir() if path.is_file())
+
+    def _current_head_commit(self) -> str | None:
+        result = self.command_runner(["git", "rev-parse", "HEAD"], self.root)
+        if result.returncode != 0:
+            return None
+        sha = result.stdout.strip()
+        return sha or None
 
     def _run_command(self, command: list[str], cwd: Path | None = None) -> CommandResult:
         env = os.environ.copy()
