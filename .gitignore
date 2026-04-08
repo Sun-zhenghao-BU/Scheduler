@@ -11,3 +11,13 @@ build/
 .worktrees/
 tasks/*
 !tasks/.gitkeep
+
+# Local AI tooling assets (machine-local, non-product runtime)
+.codebuddy/
+.codex/skills/openspec-bulk-archive-change/
+.codex/skills/openspec-continue-change/
+.codex/skills/openspec-ff-change/
+.codex/skills/openspec-new-change/
+.codex/skills/openspec-onboard/
+.codex/skills/openspec-sync-specs/
+.codex/skills/openspec-verify-change/
