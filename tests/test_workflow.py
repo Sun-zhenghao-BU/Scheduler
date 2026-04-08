@@ -304,6 +304,16 @@ class WorkflowManagerTests(unittest.TestCase):
             self.assertEqual(runner.commands[0], ["openspec", "new", "change", "ship-workflow"])
             self.assertTrue((root / metadata.change_path / ".openspec.yaml").exists())
 
+    def test_create_task_timestamps_use_shanghai_timezone(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manager = WorkflowManager(root, command_runner=RecordingRunner(root))
+
+            metadata = manager.create_task("Timezone workflow")
+
+            self.assertTrue(metadata.created_at.endswith("+08:00"))
+            self.assertTrue(metadata.updated_at.endswith("+08:00"))
+
     def test_advance_to_implement_requires_openspec_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -583,6 +593,8 @@ class DashboardTests(unittest.TestCase):
 
             self.assertEqual(payload["tasks"][0]["state"], "Waiting for workflow input")
             self.assertEqual(payload["tasks"][0]["task_id"], metadata.task_id)
+            self.assertIn("status_tone", payload["tasks"][0])
+            self.assertFalse(payload["tasks"][0]["completed"])
 
     def test_dashboard_returns_task_detail_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -625,7 +637,8 @@ class DashboardTests(unittest.TestCase):
             html = app.render_index_html()
 
             self.assertIn('id="task-detail"', html)
-            self.assertIn('id="task-selector"', html)
+            self.assertIn('id="task-list"', html)
+            self.assertIn("stage-flow", html)
 
     def test_dashboard_missing_task_returns_404(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
