@@ -33,14 +33,14 @@
 
 ## What Changes
 
-- Introduce the `task-141927` capability for this change.
+- Introduce the `task` capability for this change.
 - Capture the requested work as OpenSpec proposal, design, spec, and tasks artifacts.
 - Provide an implementation path that can be reviewed and refined before coding.
 
 ## Capabilities
 
 ### New Capabilities
-- `task-141927`: 功能名称：导出任务执行报告
+- `task`: 功能名称：导出任务执行报告
 
 ### Modified Capabilities
 - None.

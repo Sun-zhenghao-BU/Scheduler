@@ -1,7 +1,8 @@
-## ADDED Requirements
+## Context
 
-### Requirement: 功能名称：导出任务执行报告
-The system MUST support the requested change described as: 背景：
+Change title: 功能名称：导出任务执行报告
+
+The change is requested as: 背景：
 当前 workflow 已经有任务状态、阶段、review、verify、release 信息，但缺少一键汇总导出能力，不方便归档和分享。
 
 目标：
@@ -32,6 +33,23 @@ The system MUST support the requested change described as: 背景：
 3) 报告字段完整且和 show 页面关键信息一致
 4) 单元测试覆盖成功路径和失败路径
 
-#### Scenario: Requested workflow is executed
-- **WHEN** a user works on `task-141927`
-- **THEN** the project MUST have a clear OpenSpec definition for the work before implementation begins
+## Goals / Non-Goals
+
+**Goals:**
+- Define the `task` capability clearly enough for implementation.
+- Keep the first implementation path small and reviewable.
+
+**Non-Goals:**
+- Unrelated refactors outside the requested change.
+- Additional capabilities not implied by the request.
+
+## Decisions
+
+- Use `task` as the primary capability name.
+- Describe behavior and scope in OpenSpec artifacts before implementation.
+- Use checklist tasks so progress can be tracked locally.
+
+## Risks / Trade-offs
+
+- The first draft may need refinement after review.
+- Scope may still need trimming if implementation reveals hidden complexity.

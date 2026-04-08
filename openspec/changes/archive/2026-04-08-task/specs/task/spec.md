@@ -33,5 +33,5 @@ The system MUST support the requested change described as: 背景：
 4) 单元测试覆盖成功路径和失败路径
 
 #### Scenario: Requested workflow is executed
-- **WHEN** a user works on `task-115419`
+- **WHEN** a user works on `task`
 - **THEN** the project MUST have a clear OpenSpec definition for the work before implementation begins
