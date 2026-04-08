@@ -70,6 +70,7 @@ class TaskMetadata:
     last_reviewed_at: str | None = None
     ready_for_release: bool = False
     base_commit: str | None = None
+    initial_dirty_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -178,6 +179,7 @@ class WorkflowManager:
             change_name=change_name,
             change_path=self._relative_to_root(change_dir),
             base_commit=self._current_head_commit(),
+            initial_dirty_paths=self._working_tree_paths(),
         )
         self._write_metadata(task_dir, metadata)
 
@@ -202,6 +204,7 @@ class WorkflowManager:
                 self._populate_implementation_seed(task_dir / "implementation.md", change_name, request or title)
                 self._sync_managed_tasks_for(metadata, task_dir)
                 self.append_log(task_id, "intake", "Generated OpenSpec artifacts")
+                self.append_log(task_id, "intake", "brainstorming skill baseline captured in request/spec")
             else:
                 self.append_log(task_id, "intake", "Generated OpenSpec artifacts were rejected")
 
@@ -266,14 +269,31 @@ class WorkflowManager:
     def verify_task(self, task_id: str) -> VerificationResult:
         # Verification is persisted as evidence, not just printed, so release gates can rely on it later.
         metadata, task_dir = self.get_task(task_id)
-        command = ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
-        result = self.command_runner(command, self.root)
+        test_command = ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
+        validate_command = [
+            "openspec",
+            "validate",
+            "--type",
+            "change",
+            metadata.change_name,
+            "--json",
+            "--no-interactive",
+        ]
+        test_result = self.command_runner(test_command, self.root)
+        validate_result = self.command_runner(validate_command, self.root)
+        passed = test_result.returncode == 0 and validate_result.returncode == 0
+        stdout = test_result.stdout
+        if validate_result.stdout:
+            stdout = (stdout.rstrip() + "\n\n[openspec validate]\n" + validate_result.stdout).strip() + "\n"
+        stderr = test_result.stderr
+        if validate_result.stderr:
+            stderr = (stderr.rstrip() + "\n\n[openspec validate]\n" + validate_result.stderr).strip() + "\n"
         timestamp = utc_timestamp()
         verification = VerificationResult(
-            passed=result.returncode == 0,
-            command=" ".join(command),
-            stdout=result.stdout,
-            stderr=result.stderr,
+            passed=passed,
+            command=f"{' '.join(test_command)} && {' '.join(validate_command)}",
+            stdout=stdout,
+            stderr=stderr,
             timestamp=timestamp,
         )
         self._append_verification(task_dir / "implementation.md", verification)
@@ -285,7 +305,7 @@ class WorkflowManager:
         metadata.ready_for_release = not self._release_gate_reasons_for(metadata, task_dir)
         self._write_metadata(task_dir, metadata)
         state = "passed" if verification.passed else "failed"
-        self.append_log(task_id, metadata.current_stage, f"Verification {state}")
+        self.append_log(task_id, metadata.current_stage, f"Verification {state} (openspec-verify-change checks)")
         return verification
 
     def review_task(self, task_id: str) -> ReviewSummary:
@@ -307,7 +327,7 @@ class WorkflowManager:
         self._sync_managed_tasks_for(metadata, task_dir)
         metadata.ready_for_release = not self._release_gate_reasons_for(metadata, task_dir)
         self._write_metadata(task_dir, metadata)
-        self.append_log(task_id, metadata.current_stage, "Recorded self-review")
+        self.append_log(task_id, metadata.current_stage, "Recorded self-review (requesting-code-review checks)")
         return ReviewSummary(findings=findings, open_by_severity=open_by_severity)
 
     def complete_task(self, task_id: str) -> CompletionResult:
@@ -392,9 +412,13 @@ class WorkflowManager:
 
             if metadata.current_stage == "implement":
                 self._write_autopilot_implementation(task_dir, metadata)
+                self.append_log(task_id, "implement", "Fetched OpenSpec apply instructions (openspec-apply-change)")
                 verification = self.verify_task(task_id)
                 actions.append(f"verification {'passed' if verification.passed else 'failed'}")
                 self._write_autopilot_implementation(task_dir, self.get_task(task_id)[0])
+                review_reasons = self.validate_stage_transition(task_id, "review")
+                if review_reasons:
+                    return self._autopilot_result(task_id, metadata.current_stage, review_reasons, actions, False)
                 self.advance_task(task_id, "review")
                 actions.append("advanced to review")
                 continue
@@ -616,6 +640,61 @@ class WorkflowManager:
             },
         }
 
+    def _openspec_apply_payload(self, change_name: str) -> dict[str, object] | None:
+        command = ["openspec", "instructions", "apply", "--change", change_name, "--json"]
+        result = self.command_runner(command, self.root)
+        if result.returncode != 0:
+            return None
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _code_change_gate_reasons(self, metadata: TaskMetadata) -> list[str]:
+        if metadata.base_commit is None:
+            return ["Task baseline commit is missing. Set baseline before review or release."]
+
+        committed, working = self._changed_paths_since_baseline(metadata)
+        if committed is None and working is None:
+            return ["Unable to inspect git changes relative to baseline."]
+
+        initial_dirty = {path.replace("\\", "/").lower() for path in metadata.initial_dirty_paths}
+        committed_paths = set(committed or [])
+        working_paths = {
+            path
+            for path in set(working or [])
+            if path.replace("\\", "/").lower() not in initial_dirty
+        }
+        combined = committed_paths | working_paths
+        if not any(self._is_product_code_path(path) for path in combined):
+            return ["No code changes detected in src/ or tests/ relative to baseline."]
+        return []
+
+    def _changed_paths_since_baseline(self, metadata: TaskMetadata) -> tuple[list[str] | None, list[str] | None]:
+        if metadata.base_commit is None:
+            return None, None
+
+        head_commit = self._current_head_commit()
+        if head_commit is None:
+            return None, None
+
+        diff_command = ["git", "diff", "--name-only", f"{metadata.base_commit}..{head_commit}", "--"]
+        diff_result = self.command_runner(diff_command, self.root)
+        if diff_result.returncode != 0:
+            return None, None
+        committed = [line.strip().replace("\\", "/") for line in diff_result.stdout.splitlines() if line.strip()]
+
+        status_result = self.command_runner(["git", "status", "--porcelain"], self.root)
+        if status_result.returncode != 0:
+            return committed, None
+        working = []
+        for raw_line in status_result.stdout.splitlines():
+            if len(raw_line) < 4:
+                continue
+            working.append(raw_line[3:].strip().replace("\\", "/"))
+        return committed, working
+
     def _gate_spec(self, metadata: TaskMetadata) -> list[str]:
         reasons: list[str] = []
         if not self._change_dir(metadata.change_name).exists():
@@ -638,6 +717,12 @@ class WorkflowManager:
         if progress.total == 0:
             reasons.append("OpenSpec tasks.md does not contain any checklist items.")
 
+        apply_payload = self._openspec_apply_payload(metadata.change_name)
+        if apply_payload is not None and str(apply_payload.get("state", "")).lower() == "blocked":
+            missing = apply_payload.get("missingArtifacts", [])
+            if isinstance(missing, list) and missing:
+                reasons.append(f"OpenSpec apply is blocked: missing {', '.join(str(item) for item in missing)}.")
+
         if not self._section_has_meaningful_content(task_dir / "spec.md", "## Summary"):
             reasons.append("spec.md summary has not been updated.")
         return reasons
@@ -651,6 +736,7 @@ class WorkflowManager:
                 reasons.append("implementation.md does not contain implementation notes.")
             if metadata.last_verified_at is None:
                 reasons.append("Verification has not been run.")
+            reasons.extend(self._code_change_gate_reasons(metadata))
         elif metadata.current_stage == "fix":
             if not self._fixes_have_notes(task_dir / "fixes.md"):
                 reasons.append("fixes.md does not contain fix notes.")
@@ -674,6 +760,7 @@ class WorkflowManager:
         # Release is the quality gate: tasks done, latest verification green, and no open high findings.
         self._sync_managed_tasks_for(metadata, task_dir)
         reasons: list[str] = []
+        reasons.extend(self._code_change_gate_reasons(metadata))
         progress = self._tasks_progress(metadata.change_name)
         if progress.total == 0:
             reasons.append("OpenSpec tasks.md does not contain any checklist items.")
@@ -807,6 +894,14 @@ class WorkflowManager:
             elif "OpenSpec tasks are incomplete" in reason or "tasks.md does not contain any checklist items" in reason:
                 suggestions.append(
                     "Complete the remaining workflow steps; the OpenSpec tasks checklist is synchronized automatically."
+                )
+            elif "No code changes detected in src/ or tests/" in reason:
+                suggestions.append(
+                    f"Apply real code changes under src/ or tests/, then run `python -m scheduler_automation.cli autopilot --task {task_id}`."
+                )
+            elif "Task baseline commit is missing" in reason:
+                suggestions.append(
+                    "Set a task baseline commit in the dashboard first, then continue implement/review."
                 )
             elif "release.md notes have not been updated" in reason:
                 suggestions.append(
@@ -974,6 +1069,10 @@ class WorkflowManager:
     def _safe_numstat(self, value: str) -> int:
         value = value.strip()
         return int(value) if value.isdigit() else 0
+
+    def _is_product_code_path(self, path: str) -> bool:
+        normalized = path.replace("\\", "/").lower()
+        return normalized.startswith("src/") or normalized.startswith("tests/")
 
     def _is_task_related_path(self, path: str, task_id: str, change_name: str) -> bool:
         normalized = path.replace("\\", "/").lower()
@@ -1228,6 +1327,17 @@ class WorkflowManager:
         sha = result.stdout.strip()
         return sha or None
 
+    def _working_tree_paths(self) -> list[str]:
+        result = self.command_runner(["git", "status", "--porcelain"], self.root)
+        if result.returncode != 0:
+            return []
+        paths: list[str] = []
+        for raw_line in result.stdout.splitlines():
+            if len(raw_line) < 4:
+                continue
+            paths.append(raw_line[3:].strip().replace("\\", "/"))
+        return paths
+
     def _run_command(self, command: list[str], cwd: Path | None = None) -> CommandResult:
         env = os.environ.copy()
         if command[:4] == ["python", "-m", "unittest", "discover"]:
@@ -1293,16 +1403,32 @@ class WorkflowManager:
     def _write_autopilot_implementation(self, task_dir: Path, metadata: TaskMetadata) -> None:
         request = self._task_request(task_dir) or metadata.title
         verification = self._verification_label(metadata)
+        apply_payload = self._openspec_apply_payload(metadata.change_name)
+        apply_instruction = ""
+        if apply_payload is not None:
+            instruction_text = str(apply_payload.get("instruction", "")).strip()
+            progress = apply_payload.get("progress", {})
+            complete = int(progress.get("complete", 0)) if isinstance(progress, dict) else 0
+            total = int(progress.get("total", 0)) if isinstance(progress, dict) else 0
+            apply_instruction = (
+                f"- OpenSpec apply progress: {complete}/{total}\n"
+                f"- OpenSpec instruction: {instruction_text or 'No instruction returned.'}\n"
+            )
+        else:
+            apply_instruction = "- OpenSpec apply instruction unavailable.\n"
         text = (
             "# Superpower Implementation\n\n"
             "<!-- workflow-autopilot -->\n\n"
             "## Plan\n\n"
             f"Advance task `{metadata.task_id}` for OpenSpec change `{metadata.change_name}` through the local workflow.\n"
             f"Requested work: {request}\n\n"
+            "Use OpenSpec apply guidance as the execution baseline in this stage.\n"
+            "Skill bridge: openspec-apply-change.\n\n"
             "## Code changes\n\n"
             f"- OpenSpec change: {metadata.change_name}\n"
             f"- Current stage: {metadata.current_stage}\n"
-            "- Workflow evidence is being recorded automatically by autopilot.\n\n"
+            "- Workflow evidence is being recorded automatically by autopilot.\n"
+            f"{apply_instruction}\n"
             "## Verification\n\n"
             f"- Latest status: {verification}\n"
         )
@@ -1315,7 +1441,7 @@ class WorkflowManager:
                 "# Review\n\n"
                 "<!-- workflow-autopilot -->\n\n"
                 "## Summary\n\n"
-                "Automated self-review completed after the latest passing verification run and found no blocking issues.\n\n"
+                "Automated self-review (requesting-code-review checklist) completed after the latest passing verification run and found no blocking issues.\n\n"
                 "## Findings\n\n"
                 "None.\n"
             )
@@ -1325,7 +1451,7 @@ class WorkflowManager:
                 "# Review\n\n"
                 "<!-- workflow-autopilot -->\n\n"
                 "## Summary\n\n"
-                "Automated self-review found a blocking issue after the latest verification run.\n\n"
+                "Automated self-review (requesting-code-review checklist) found a blocking issue after the latest verification run.\n\n"
                 "## Findings\n\n"
                 "### Finding F001\n"
                 "- Severity: high\n"

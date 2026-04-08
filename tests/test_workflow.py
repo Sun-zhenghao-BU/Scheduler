@@ -29,8 +29,42 @@ class RecordingRunner:
             change_dir = self.root / "openspec" / "changes" / change_name
             change_dir.mkdir(parents=True, exist_ok=True)
             (change_dir / ".openspec.yaml").write_text("schema: spec-driven\n", encoding="utf-8")
+        if command[:3] in (["openspec", "instructions", "apply"], ["openspec.cmd", "instructions", "apply"]):
+            return CommandResult(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "state": "ready",
+                        "schemaName": "spec-driven",
+                        "instruction": "Apply pending tasks.",
+                        "progress": {"total": 4, "complete": 1, "remaining": 3},
+                        "tasks": [{"id": "2.1", "text": "Implement", "status": "pending"}],
+                    }
+                ),
+                stderr="",
+            )
+        if command[:3] in (["openspec", "status", "--change"], ["openspec.cmd", "status", "--change"]):
+            return CommandResult(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "changeName": command[3] if len(command) > 3 else "",
+                        "schemaName": "spec-driven",
+                        "isComplete": False,
+                    }
+                ),
+                stderr="",
+            )
+        if command[:3] in (["openspec", "validate", "--type"], ["openspec.cmd", "validate", "--type"]):
+            return CommandResult(returncode=0, stdout='{"summary":{"totals":{"failed":0}}}', stderr="")
         if command == ["git", "rev-parse", "HEAD"]:
             return CommandResult(returncode=0, stdout="deadbeef\n", stderr="")
+        if len(command) >= 4 and command[:3] == ["git", "diff", "--name-only"]:
+            return CommandResult(returncode=0, stdout="src/scheduler_automation/workflow.py\n", stderr="")
+        if len(command) >= 4 and command[:3] == ["git", "diff", "--numstat"]:
+            return CommandResult(returncode=0, stdout="3\t1\tsrc/scheduler_automation/workflow.py\n", stderr="")
+        if command == ["git", "status", "--porcelain"]:
+            return CommandResult(returncode=0, stdout="", stderr="")
 
         if self.results:
             return self.results.pop(0)
@@ -351,8 +385,132 @@ class WorkflowManagerTests(unittest.TestCase):
 
             implementation_path = root / "tasks" / metadata.task_id / "implementation.md"
             self.assertTrue(result.passed)
-            self.assertEqual(result.command, "python -m unittest discover -s tests -v")
+            self.assertIn("python -m unittest discover -s tests -v", result.command)
+            self.assertIn("openspec validate --type change", result.command)
             self.assertIn("verification ok", implementation_path.read_text(encoding="utf-8"))
+
+    def test_review_gate_requires_real_code_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            def command_runner(command: list[str], cwd: Path | None = None) -> CommandResult:
+                if command[:3] in (["openspec", "new", "change"], ["openspec.cmd", "new", "change"]):
+                    change_name = command[3]
+                    change_dir = root / "openspec" / "changes" / change_name
+                    change_dir.mkdir(parents=True, exist_ok=True)
+                    (change_dir / ".openspec.yaml").write_text("schema: spec-driven\n", encoding="utf-8")
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                if command == ["git", "rev-parse", "HEAD"]:
+                    return CommandResult(returncode=0, stdout="deadbeef\n", stderr="")
+                if command[:3] in (["openspec", "instructions", "apply"], ["openspec.cmd", "instructions", "apply"]):
+                    return CommandResult(returncode=0, stdout='{"state":"ready","progress":{"total":4,"complete":1,"remaining":3}}', stderr="")
+                if command[:3] in (["openspec", "status", "--change"], ["openspec.cmd", "status", "--change"]):
+                    return CommandResult(returncode=0, stdout='{"schemaName":"spec-driven"}', stderr="")
+                if command[:3] in (["openspec", "validate", "--type"], ["openspec.cmd", "validate", "--type"]):
+                    return CommandResult(returncode=0, stdout='{"summary":{"totals":{"failed":0}}}', stderr="")
+                if len(command) >= 4 and command[:3] == ["git", "diff", "--name-only"]:
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                if command == ["git", "status", "--porcelain"]:
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                if command[:4] == ["python", "-m", "unittest", "discover"]:
+                    return CommandResult(returncode=0, stdout="verification ok", stderr="")
+                return CommandResult(returncode=0, stdout="", stderr="")
+
+            manager = WorkflowManager(root, command_runner=command_runner)
+            metadata = manager.create_task("No code change workflow")
+            self._write_spec_artifacts(root, metadata.change_name, "- [x] done\n")
+            self._write_local_spec_summary(root, metadata.task_id)
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            self._write_implementation_note(root, metadata.task_id, "Updated docs only.\n")
+            manager.verify_task(metadata.task_id)
+
+            with self.assertRaisesRegex(ValueError, "No code changes detected"):
+                manager.advance_task(metadata.task_id, "review")
+
+    def test_review_gate_ignores_preexisting_dirty_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            status_calls = {"count": 0}
+
+            def command_runner(command: list[str], cwd: Path | None = None) -> CommandResult:
+                if command[:3] in (["openspec", "new", "change"], ["openspec.cmd", "new", "change"]):
+                    change_name = command[3]
+                    change_dir = root / "openspec" / "changes" / change_name
+                    change_dir.mkdir(parents=True, exist_ok=True)
+                    (change_dir / ".openspec.yaml").write_text("schema: spec-driven\n", encoding="utf-8")
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                if command == ["git", "rev-parse", "HEAD"]:
+                    return CommandResult(returncode=0, stdout="deadbeef\n", stderr="")
+                if command[:3] in (["openspec", "instructions", "apply"], ["openspec.cmd", "instructions", "apply"]):
+                    return CommandResult(returncode=0, stdout='{"state":"ready","progress":{"total":4,"complete":1,"remaining":3}}', stderr="")
+                if command[:3] in (["openspec", "status", "--change"], ["openspec.cmd", "status", "--change"]):
+                    return CommandResult(returncode=0, stdout='{"schemaName":"spec-driven"}', stderr="")
+                if command[:3] in (["openspec", "validate", "--type"], ["openspec.cmd", "validate", "--type"]):
+                    return CommandResult(returncode=0, stdout='{"summary":{"totals":{"failed":0}}}', stderr="")
+                if len(command) >= 4 and command[:3] == ["git", "diff", "--name-only"]:
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                if command == ["git", "status", "--porcelain"]:
+                    status_calls["count"] += 1
+                    return CommandResult(returncode=0, stdout=" M src/scheduler_automation/workflow.py\n", stderr="")
+                if command[:4] == ["python", "-m", "unittest", "discover"]:
+                    return CommandResult(returncode=0, stdout="verification ok", stderr="")
+                return CommandResult(returncode=0, stdout="", stderr="")
+
+            manager = WorkflowManager(root, command_runner=command_runner)
+            metadata = manager.create_task("Pre-dirty workflow")
+            self._write_spec_artifacts(root, metadata.change_name, "- [x] done\n")
+            self._write_local_spec_summary(root, metadata.task_id)
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            self._write_implementation_note(root, metadata.task_id, "Touched pre-existing dirty file only.\n")
+            manager.verify_task(metadata.task_id)
+
+            with self.assertRaisesRegex(ValueError, "No code changes detected"):
+                manager.advance_task(metadata.task_id, "review")
+            self.assertGreaterEqual(status_calls["count"], 2)
+
+    def test_review_gate_allows_committed_changes_even_if_path_was_initially_dirty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            status_calls = {"count": 0}
+
+            def command_runner(command: list[str], cwd: Path | None = None) -> CommandResult:
+                if command[:3] in (["openspec", "new", "change"], ["openspec.cmd", "new", "change"]):
+                    change_name = command[3]
+                    change_dir = root / "openspec" / "changes" / change_name
+                    change_dir.mkdir(parents=True, exist_ok=True)
+                    (change_dir / ".openspec.yaml").write_text("schema: spec-driven\n", encoding="utf-8")
+                    return CommandResult(returncode=0, stdout="", stderr="")
+                if command == ["git", "rev-parse", "HEAD"]:
+                    return CommandResult(returncode=0, stdout="deadbeef\n", stderr="")
+                if command[:3] in (["openspec", "instructions", "apply"], ["openspec.cmd", "instructions", "apply"]):
+                    return CommandResult(returncode=0, stdout='{"state":"ready","progress":{"total":4,"complete":1,"remaining":3}}', stderr="")
+                if command[:3] in (["openspec", "status", "--change"], ["openspec.cmd", "status", "--change"]):
+                    return CommandResult(returncode=0, stdout='{"schemaName":"spec-driven"}', stderr="")
+                if command[:3] in (["openspec", "validate", "--type"], ["openspec.cmd", "validate", "--type"]):
+                    return CommandResult(returncode=0, stdout='{"summary":{"totals":{"failed":0}}}', stderr="")
+                if len(command) >= 4 and command[:3] == ["git", "diff", "--name-only"]:
+                    return CommandResult(returncode=0, stdout="src/scheduler_automation/workflow.py\n", stderr="")
+                if command == ["git", "status", "--porcelain"]:
+                    status_calls["count"] += 1
+                    return CommandResult(returncode=0, stdout=" M src/scheduler_automation/workflow.py\n", stderr="")
+                if command[:4] == ["python", "-m", "unittest", "discover"]:
+                    return CommandResult(returncode=0, stdout="verification ok", stderr="")
+                return CommandResult(returncode=0, stdout="", stderr="")
+
+            manager = WorkflowManager(root, command_runner=command_runner)
+            metadata = manager.create_task("Committed over pre-dirty")
+            self._write_spec_artifacts(root, metadata.change_name, "- [x] done\n")
+            self._write_local_spec_summary(root, metadata.task_id)
+            manager.advance_task(metadata.task_id, "spec")
+            manager.advance_task(metadata.task_id, "implement")
+            self._write_implementation_note(root, metadata.task_id, "Committed a real code change.\n")
+            manager.verify_task(metadata.task_id)
+
+            updated = manager.advance_task(metadata.task_id, "review")
+            self.assertEqual(updated.current_stage, "review")
+            self.assertGreaterEqual(status_calls["count"], 2)
 
     def test_review_blocks_release_when_high_finding_is_open(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -612,6 +770,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("suggested_actions", detail["task"])
             self.assertIn("timeline", detail["task"])
             self.assertIn("conclusion", detail["task"])
+            self.assertIn("skill_pipeline", detail["task"])
+            self.assertTrue(any(skill["skill"] == "brainstorming" for skill in detail["task"]["skill_pipeline"]))
 
     def test_dashboard_root_returns_html(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -639,6 +799,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn('id="task-detail"', html)
             self.assertIn('id="task-list"', html)
             self.assertIn("stage-flow", html)
+            self.assertIn("Skill Pipeline", html)
 
     def test_dashboard_missing_task_returns_404(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
