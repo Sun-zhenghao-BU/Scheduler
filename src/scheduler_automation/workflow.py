@@ -6,9 +6,10 @@ import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
+from zoneinfo import ZoneInfo
 
 from scheduler_automation.artifact_generation import GeneratedArtifacts
 
@@ -39,8 +40,11 @@ def slugify(value: str) -> str:
     return slug or "task"
 
 
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
 def utc_timestamp() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(SHANGHAI_TZ).replace(microsecond=0).isoformat()
 
 
 @dataclass
@@ -150,7 +154,7 @@ class WorkflowManager:
 
     def create_task(self, title: str, request: str = "") -> TaskMetadata:
         # Task creation always starts by binding the local workspace to exactly one OpenSpec change.
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(SHANGHAI_TZ).strftime("%Y%m%d-%H%M%S")
         task_id = f"{timestamp}-{slugify(title)}"
         task_dir = self.tasks_dir / task_id
         task_dir.mkdir(parents=True, exist_ok=False)

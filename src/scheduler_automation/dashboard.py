@@ -23,13 +23,16 @@ class DashboardApp:
     def build_task_list_payload(self) -> dict[str, object]:
         tasks = []
         for snapshot in self.manager.list_task_snapshots():
-            state = self._task_state(snapshot.metadata.current_stage, snapshot.blocked_reasons, completed=False)
+            completed = self._is_completed(snapshot.metadata)
+            state = self._task_state(snapshot.metadata.current_stage, snapshot.blocked_reasons, completed=completed)
             tasks.append(
                 {
                     "task_id": snapshot.metadata.task_id,
                     "title": snapshot.metadata.title,
                     "current_stage": snapshot.metadata.current_stage,
                     "state": state["label"],
+                    "status_tone": state["tone"],
+                    "completed": completed,
                     "change_name": snapshot.metadata.change_name,
                 }
             )
@@ -93,50 +96,80 @@ class DashboardApp:
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scheduler Workbench</title>
 <style>
-body{font-family:Segoe UI,Tahoma,sans-serif;background:#f6f3ed;color:#231f1a;margin:0}
-.page{max-width:1100px;margin:0 auto;padding:16px}.box{background:#fff;border:1px solid #d8cab6;border-radius:12px;padding:12px;margin-bottom:10px}
-.row{display:flex;gap:8px;flex-wrap:wrap}input,textarea,select,button{padding:8px 10px;border:1px solid #d8cab6;border-radius:8px}
-textarea{min-height:80px;min-width:320px}button{cursor:pointer}.pill{display:inline-block;padding:3px 8px;border-radius:999px;color:#fff;font-size:12px}
-.ok{background:#2f7d4a}.warn{background:#b55a1f}.bad{background:#b2432f}pre{white-space:pre-wrap;word-break:break-word}
-.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:10px}@media(max-width:860px){.grid{grid-template-columns:1fr}}
+body{font-family:Segoe UI,Tahoma,sans-serif;background:#f3f1eb;color:#231f1a;margin:0}
+.page{max-width:1320px;margin:0 auto;padding:16px}
+.box{background:#fff;border:1px solid #d8cab6;border-radius:12px;padding:12px;margin-bottom:10px}
+.workspace{display:grid;grid-template-columns:300px 1fr;gap:12px;align-items:start}
+.sidebar{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+input,textarea,button{padding:8px 10px;border:1px solid #d8cab6;border-radius:8px}
+textarea{min-height:80px;min-width:320px}
+button{cursor:pointer}
+.pill{display:inline-block;padding:3px 8px;border-radius:999px;color:#fff;font-size:12px}
+.ok{background:#2f7d4a}.warn{background:#b55a1f}.bad{background:#b2432f}
+.task-list-title{font-size:12px;letter-spacing:.06em;color:#756858;text-transform:uppercase;margin:8px 0 6px}
+.task-item{width:100%;text-align:left;background:#fff;border:1px solid #d8cab6;border-radius:10px;padding:10px;margin-bottom:8px}
+.task-item.active{border-color:#2f7d4a;box-shadow:0 0 0 1px #2f7d4a inset}
+.task-item .name{font-weight:600}
+.task-item .meta{font-size:12px;color:#6a5d4e;margin-top:4px}
+pre{white-space:pre-wrap;word-break:break-word}
+.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:10px}
+.stage-flow{display:flex;flex-wrap:wrap;gap:10px}
+.stage-node{display:flex;align-items:center;gap:6px}
+.stage-node .dot{width:12px;height:12px;border-radius:50%;display:inline-block;border:1px solid #6a5d4e;background:#f8f4ed}
+.stage-node .label{font-size:12px;text-transform:capitalize;color:#6a5d4e}
+.stage-node.done .dot{background:#2f7d4a;border-color:#2f7d4a}
+.stage-node.current .dot{background:#b55a1f;border-color:#b55a1f}
+.stage-node.pending .dot{background:#f8f4ed;border-color:#bcae9b}
+.stage-node .line{display:inline-block;width:26px;height:2px;background:#c8b9a5;margin-left:2px}
+@media(max-width:1000px){.workspace{grid-template-columns:1fr}.sidebar{position:static;max-height:none}}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
 </style></head>
 <body><div class="page">
-<div class="box row">
-  <input id="new-task-title" placeholder="New task title">
-  <textarea id="new-task-request" placeholder="Describe request"></textarea>
-  <label><input id="new-task-autopilot" type="checkbox" checked> Run autopilot after create</label>
-  <button id="create-task">Create Task</button>
+<div class="workspace">
+  <aside class="box sidebar">
+    <h3>Tasks</h3>
+    <div id="task-list">Loading...</div>
+  </aside>
+  <main>
+    <div class="box row">
+      <input id="new-task-title" placeholder="New task title">
+      <textarea id="new-task-request" placeholder="Describe request"></textarea>
+      <label><input id="new-task-autopilot" type="checkbox" checked> Run autopilot after create</label>
+      <button id="create-task">Create Task</button>
+    </div>
+    <div class="box row">
+      <button id="refresh-task">Refresh</button>
+      <button id="continue-step">Continue One Step</button>
+      <button id="run-verify">Run Verify</button>
+      <button id="record-review">Record Review</button>
+      <button id="continue-autopilot">Continue Autopilot</button>
+      <button id="set-baseline">Set Baseline</button>
+      <button id="complete-task">Archive, Commit, Push</button>
+    </div>
+    <div id="flash"></div>
+    <div id="task-detail" class="box">Loading task...</div>
+  </main>
 </div>
-<div class="box row">
-  <label for="task-selector">Task</label><select id="task-selector"></select>
-  <button id="refresh-task">Refresh</button>
-  <button id="continue-step">Continue One Step</button>
-  <button id="run-verify">Run Verify</button>
-  <button id="record-review">Record Review</button>
-  <button id="continue-autopilot">Continue Autopilot</button>
-  <button id="set-baseline">Set Baseline</button>
-  <button id="complete-task">Archive, Commit, Push</button>
-</div>
-<div id="flash"></div>
-<div id="task-detail" class="box">Loading task...</div>
 </div>
 <script>
 const state={selectedTaskId:null,busy:false};
 async function fetchJson(url,opts={}){const r=await fetch(url,{cache:'no-store',...opts});const t=await r.text();const p=t?JSON.parse(t):{};if(!r.ok)throw new Error(p.error||`Request failed: ${r.status}`);return p;}
 function flash(m){document.getElementById('flash').textContent=m||'';}
-function setBusy(v){state.busy=v;['create-task','new-task-title','new-task-request','new-task-autopilot','continue-step','run-verify','record-review','continue-autopilot','set-baseline','complete-task','refresh-task','task-selector'].forEach(id=>{document.getElementById(id).disabled=v;});}
-function renderTaskSelector(tasks){const s=document.getElementById('task-selector');if(!tasks.length){state.selectedTaskId=null;s.innerHTML='';document.getElementById('task-detail').innerHTML='No tasks found yet.';return;}if(!state.selectedTaskId||!tasks.some(t=>t.task_id===state.selectedTaskId)){state.selectedTaskId=tasks[0].task_id;}s.innerHTML=tasks.map(t=>`<option value="${t.task_id}" ${t.task_id===state.selectedTaskId?'selected':''}>${t.title} (${t.current_stage})</option>`).join('');}
+function setBusy(v){state.busy=v;['create-task','new-task-title','new-task-request','new-task-autopilot','continue-step','run-verify','record-review','continue-autopilot','set-baseline','complete-task','refresh-task'].forEach(id=>{const n=document.getElementById(id);if(n)n.disabled=v;});}
+function taskItemHtml(task){return `<button class="task-item ${task.task_id===state.selectedTaskId?'active':''}" data-task-id="${task.task_id}"><div class="name">${task.title}</div><div class="meta">${task.current_stage} | ${task.change_name}</div><span class="pill ${task.status_tone==='ok'?'ok':task.status_tone==='warn'?'warn':'bad'}">${task.state}</span></button>`;}
+function renderTaskList(tasks){const panel=document.getElementById('task-list');if(!tasks.length){state.selectedTaskId=null;panel.innerHTML='<div>No tasks found yet.</div>';document.getElementById('task-detail').innerHTML='No tasks found yet.';return;}const running=tasks.filter(t=>!t.completed);const completed=tasks.filter(t=>t.completed);const ordered=[...running,...completed];if(!state.selectedTaskId||!ordered.some(t=>t.task_id===state.selectedTaskId)){state.selectedTaskId=(running[0]||ordered[0]).task_id;}const runningHtml=running.length?running.map(taskItemHtml).join(''):'<div>No running tasks.</div>';const doneHtml=completed.length?completed.map(taskItemHtml).join(''):'<div>No completed tasks.</div>';panel.innerHTML=`<div class="task-list-title">Running</div>${runningHtml}<div class="task-list-title">Completed</div>${doneHtml}`;}
 function artifactsHtml(items){if(!items.length)return '<div>No artifacts</div>';return items.map(i=>`<details><summary>${i.path}</summary><pre>${i.content}</pre></details>`).join('');}
-function stageProgressHtml(items){if(!items||!items.length)return '<div>No stage data</div>';return `<div class="row">${items.map(s=>`<span class="pill ${s.state==='done'?'ok':s.state==='current'?'warn':'bad'}">${s.stage}</span>`).join('')}</div>`;}
+function stageProgressHtml(items){if(!items||!items.length)return '<div>No stage data</div>';return `<div class="stage-flow">${items.map((s,i)=>`<div class="stage-node ${s.state}"><span class="dot"></span><span class="label">${s.stage}</span>${i<items.length-1?'<span class="line"></span>':''}</div>`).join('')}</div>`;}
 function compareHtml(compare){if(!compare||!compare.available){return `<div>${compare&&compare.reason?compare.reason:'Compare not available'}</div><p><small>Click "Set Baseline" to start clean compare for this task.</small></p>`;}const committed=compare.related_committed_files.length?`<ul>${compare.related_committed_files.map(f=>`<li>${f.path} (+${f.added}/-${f.deleted})</li>`).join('')}</ul>`:'<div>No related committed delta in range.</div>';const working=compare.related_working_tree.length?`<ul>${compare.related_working_tree.map(f=>`<li>${f.status} ${f.path}</li>`).join('')}</ul>`:'<div>Related working tree clean.</div>';const hiddenCommitted=compare.hidden_committed_count?`<p><small>${compare.hidden_committed_count} unrelated committed file(s) hidden.</small></p>`:'';const hiddenWorking=compare.hidden_working_count?`<p><small>${compare.hidden_working_count} unrelated working tree file(s) hidden.</small></p>`:'';return `<p><b>Range:</b> ${compare.commit_range}</p><p><b>Totals:</b> ${compare.totals.files} files, +${compare.totals.added}/-${compare.totals.deleted}</p><h5>Related committed changes</h5>${committed}${hiddenCommitted}<h5>Related working tree</h5>${working}${hiddenWorking}`;}
 function completionHtml(completion){if(!completion){return '<div>Not completed yet.</div>';}const checks=completion.checks?`<p>Archive exists: ${completion.checks.archive_exists?'yes':'no'}</p><p>Metadata archived: ${completion.checks.metadata_archived?'yes':'no'}</p>`:'';const sha=completion.commit_sha||'unavailable';return `<p><b>Completed at:</b> ${completion.completed_at}</p><p><b>Archive:</b> ${completion.archive_path}</p><p><b>Commit:</b> ${sha}</p><p><b>Evidence file:</b> ${completion.path}</p>${checks}`;}
 function renderTaskDetail(task){const blocked=task.blocked_reasons.length?`<ul>${task.blocked_reasons.map(r=>`<li>${r}</li>`).join('')}</ul>`:'<div>No blockers</div>';const suggested=task.suggested_actions.length?`<ol>${task.suggested_actions.map(r=>`<li>${r}</li>`).join('')}</ol>`:'<div>No manual step required</div>';const timeline=task.timeline.length?task.timeline.map(e=>`<div><small>${e.timestamp} | ${e.stage}</small><div>${e.message}</div></div>`).join(''):'<div>No timeline</div>';const findings=task.review_findings.length?task.review_findings.map(f=>`<div><small>${f.finding_id} | ${f.severity} | ${f.status}</small><div>${f.summary}</div></div>`).join(''):'<div>No findings</div>';document.getElementById('task-detail').innerHTML=`<div><h2>${task.title}</h2><div>${task.task_id}</div><span class="pill ${task.status_tone==='ok'?'ok':task.status_tone==='warn'?'warn':'bad'}">${task.status}</span><p><b>Stage:</b> ${task.current_stage} | <b>Change:</b> ${task.change_name}</p><h3>${task.conclusion.title}</h3><p>${task.conclusion.body}</p></div><div class="grid"><div><div class="box"><h4>Stage Progress</h4>${stageProgressHtml(task.stage_progress)}</div><div class="box"><h4>Recommended Steps</h4>${suggested}</div><div class="box"><h4>Execution Timeline</h4>${timeline}</div><div class="box"><h4>Stage Artifacts</h4>${artifactsHtml(task.artifacts)}</div></div><div><div class="box"><h4>Quality</h4><p>Verification: ${task.verification}</p><p>Open high findings: ${task.high_findings_open}</p><p>OpenSpec tasks: ${task.progress.complete}/${task.progress.total}</p></div><div class="box"><h4>Review Findings</h4>${findings}</div><div class="box"><h4>Code Delta vs Baseline</h4>${compareHtml(task.compare)}</div><div class="box"><h4>Completion Evidence</h4>${completionHtml(task.completion)}</div><div class="box"><h4>Blockers</h4>${blocked}</div></div></div>`;document.getElementById('continue-step').disabled=state.busy||!task.can_step;document.getElementById('run-verify').disabled=state.busy||!task.can_verify;document.getElementById('record-review').disabled=state.busy||!task.can_review;document.getElementById('continue-autopilot').disabled=state.busy||!task.can_autopilot;document.getElementById('set-baseline').disabled=state.busy;document.getElementById('complete-task').disabled=state.busy||!task.can_complete;}
-async function loadTaskList(){const p=await fetchJson('/api/tasks');renderTaskSelector(p.tasks);}
+async function loadTaskList(){const p=await fetchJson('/api/tasks');renderTaskList(p.tasks||[]);}
 async function loadTaskDetail(){if(!state.selectedTaskId)return;const p=await fetchJson(`/api/tasks/${encodeURIComponent(state.selectedTaskId)}`);renderTaskDetail(p.task);}
 async function refresh(){try{await loadTaskList();await loadTaskDetail();}catch(e){document.getElementById('task-detail').innerHTML=e.message;}}
 async function runAction(action,busyText){if(!state.selectedTaskId){flash('Select a task first.');return;}setBusy(true);flash(busyText);try{const p=await fetchJson(`/api/tasks/${encodeURIComponent(state.selectedTaskId)}/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});flash(p.result.message||'Action complete.');renderTaskDetail(p.task);}catch(e){flash(e.message);}finally{setBusy(false);await refresh();}}
 async function createTask(){const title=document.getElementById('new-task-title').value.trim();const request=document.getElementById('new-task-request').value.trim();const runAutopilot=document.getElementById('new-task-autopilot').checked;if(!title){flash('Task title is required.');return;}setBusy(true);flash('Creating task...');try{const p=await fetchJson('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,request,run_autopilot:runAutopilot})});state.selectedTaskId=p.task.task_id;flash(p.result.message||'Task created.');document.getElementById('new-task-title').value='';document.getElementById('new-task-request').value='';await refresh();}catch(e){flash(e.message);}finally{setBusy(false);}}
-document.getElementById('task-selector').addEventListener('change',async e=>{state.selectedTaskId=e.target.value;await loadTaskDetail();});
+document.getElementById('task-list').addEventListener('click',async e=>{const item=e.target.closest('[data-task-id]');if(!item)return;state.selectedTaskId=item.dataset.taskId;await loadTaskDetail();await loadTaskList();});
 document.getElementById('refresh-task').addEventListener('click',refresh);
 document.getElementById('create-task').addEventListener('click',createTask);
 document.getElementById('continue-step').addEventListener('click',()=>runAction('step','Continuing one workflow step...'));
