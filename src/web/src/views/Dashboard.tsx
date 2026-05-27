@@ -12,7 +12,7 @@ interface Props {
 
 function Dashboard({ onTaskSelect }: Props) {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
   const navigate = useNavigate();
@@ -30,8 +30,21 @@ function Dashboard({ onTaskSelect }: Props) {
   }, []);
 
   useEffect(() => {
-    fetchTasks();
-  }, [fetchTasks]);
+    let active = true;
+    listTasks()
+      .then((data) => {
+        if (active) setTasks(data);
+      })
+      .catch(() => {
+        message.error('任务列表加载失败');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleCreate = async (values: { title: string; request?: string }) => {
     try {

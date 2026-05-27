@@ -46,6 +46,8 @@ class TaskDetailResponse(BaseModel):
     current_stage: str
     created_at: str
     updated_at: str
+    requirement_status: str = "drafting"
+    requirement_confirmed_at: str = ""
     files: dict[str, str]
     journal: str
 
@@ -114,6 +116,8 @@ def get_task(task_id: str):
         current_stage=metadata.current_stage,
         created_at=metadata.created_at,
         updated_at=metadata.updated_at,
+        requirement_status=metadata.requirement_status,
+        requirement_confirmed_at=metadata.requirement_confirmed_at,
         files=files,
         journal=journal,
     )

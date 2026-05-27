@@ -4,6 +4,8 @@ export interface Task {
   current_stage: string;
   created_at: string;
   updated_at: string;
+  requirement_status: 'drafting' | 'confirmed';
+  requirement_confirmed_at: string;
 }
 
 export interface TaskDetail extends Task {
@@ -61,6 +63,18 @@ export interface AgentResult {
   status: AgentStatus;
   content: string;
   error: string;
+}
+
+export interface RequirementMessage {
+  role: 'user' | 'product_manager';
+  content: string;
+  created_at: string;
+}
+
+export interface RequirementSession {
+  status: 'drafting' | 'confirmed';
+  summary: string;
+  messages: RequirementMessage[];
 }
 
 export const AGENT_LABELS: Record<AgentRole, string> = {

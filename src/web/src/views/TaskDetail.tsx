@@ -12,10 +12,20 @@ import {
   Card,
   Row,
   Col,
+  Alert,
 } from 'antd';
-import { ArrowLeftOutlined, SaveOutlined, StepForwardOutlined, TeamOutlined } from '@ant-design/icons';
-import { getTask, advanceTask, updateTaskFile, getAgentResults, runAgentWorkflow } from '../api';
-import type { AgentResult, AgentRole, TaskDetail, Stage } from '../types';
+import { ArrowLeftOutlined, CheckCircleOutlined, SaveOutlined, SendOutlined, StepForwardOutlined, TeamOutlined } from '@ant-design/icons';
+import {
+  addRequirementMessage,
+  confirmRequirements,
+  getAgentResults,
+  getRequirements,
+  getTask,
+  advanceTask,
+  updateTaskFile,
+  runAgentWorkflow,
+} from '../api';
+import type { AgentResult, AgentRole, RequirementSession, TaskDetail, Stage } from '../types';
 import { AGENT_LABELS, STAGES, STAGE_LABELS, STAGE_COLORS } from '../types';
 
 const { TextArea } = Input;
@@ -39,11 +49,15 @@ function TaskDetail() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
   const [detail, setDetail] = useState<TaskDetail | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [agents, setAgents] = useState<AgentResult[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
+  const [requirements, setRequirements] = useState<RequirementSession | null>(null);
+  const [requirementMessage, setRequirementMessage] = useState('');
+  const [requirementSummary, setRequirementSummary] = useState('');
+  const [requirementsLoading, setRequirementsLoading] = useState(false);
 
   const fetchTask = useCallback(async () => {
     if (!taskId) return;
@@ -58,34 +72,102 @@ function TaskDetail() {
     }
   }, [taskId]);
 
-  const fetchAgents = useCallback(async () => {
+  const fetchRequirements = useCallback(async () => {
     if (!taskId) return;
     try {
-      setAgents(await getAgentResults(taskId));
+      const data = await getRequirements(taskId);
+      setRequirements(data);
+      setRequirementSummary(data.summary);
     } catch {
-      setAgents([]);
+      setRequirements(null);
     }
   }, [taskId]);
 
   useEffect(() => {
-    fetchTask();
-    fetchAgents();
-  }, [fetchTask, fetchAgents]);
+    if (!taskId) return;
+    let active = true;
+    getTask(taskId)
+      .then((data) => {
+        if (active) setDetail(data);
+      })
+      .catch(() => {
+        message.error('任务加载失败');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    getAgentResults(taskId)
+      .then((data) => {
+        if (active) setAgents(data);
+      })
+      .catch(() => {
+        if (active) setAgents([]);
+      });
+    getRequirements(taskId)
+      .then((data) => {
+        if (!active) return;
+        setRequirements(data);
+        setRequirementSummary(data.summary);
+      })
+      .catch(() => {
+        if (active) setRequirements(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [taskId]);
 
   const handleAdvance = async () => {
     if (!detail || !taskId) return;
     const currentIdx = STAGES.indexOf(detail.current_stage as Stage);
+    const nextStage = STAGES[currentIdx + 1];
     if (currentIdx >= STAGES.length - 1) {
       message.info('已经是最终阶段');
       return;
     }
-    const nextStage = STAGES[currentIdx + 1];
+    if (nextStage === 'implement' && detail.requirement_status !== 'confirmed') {
+      message.warning('请先确认需求，再进入开发阶段');
+      return;
+    }
     try {
       await advanceTask(taskId, nextStage);
       message.success(`已推进到${STAGE_LABELS[nextStage as Stage]}`);
       fetchTask();
     } catch {
       message.error('阶段推进失败');
+    }
+  };
+
+  const handleAddRequirementMessage = async () => {
+    if (!taskId || !requirementMessage.trim()) return;
+    setRequirementsLoading(true);
+    try {
+      const updated = await addRequirementMessage(taskId, 'user', requirementMessage.trim());
+      setRequirements(updated);
+      setRequirementMessage('');
+      message.success('需求补充已记录');
+    } catch {
+      message.error('需求补充保存失败');
+    } finally {
+      setRequirementsLoading(false);
+    }
+  };
+
+  const handleConfirmRequirements = async () => {
+    if (!taskId || !requirementSummary.trim()) {
+      message.warning('请填写确认后的需求摘要');
+      return;
+    }
+    setRequirementsLoading(true);
+    try {
+      await confirmRequirements(taskId, requirementSummary.trim());
+      message.success('需求已确认');
+      await fetchTask();
+      await fetchRequirements();
+    } catch {
+      message.error('需求确认失败');
+    } finally {
+      setRequirementsLoading(false);
     }
   };
 
@@ -122,6 +204,7 @@ function TaskDetail() {
   }
 
   const currentIdx = STAGES.indexOf(detail.current_stage as Stage);
+  const nextStage = currentIdx < STAGES.length - 1 ? STAGES[currentIdx + 1] : null;
   const fileTabs = Object.entries(detail.files).map(([name, content]) => ({
     key: name,
     label: FILE_LABELS[name] || name.replace('.md', ''),
@@ -195,11 +278,16 @@ function TaskDetail() {
           extra={
             currentIdx < STAGES.length - 1 ? (
               <Popconfirm
-                title={`确认推进到${STAGE_LABELS[STAGES[currentIdx + 1] as Stage]}？`}
+                title={`确认推进到${STAGE_LABELS[nextStage as Stage]}？`}
+                disabled={nextStage === 'implement' && detail.requirement_status !== 'confirmed'}
                 onConfirm={handleAdvance}
               >
-                <Button type="primary" icon={<StepForwardOutlined />}>
-                  推进到{STAGE_LABELS[STAGES[currentIdx + 1] as Stage]}
+                <Button
+                  type="primary"
+                  icon={<StepForwardOutlined />}
+                  disabled={nextStage === 'implement' && detail.requirement_status !== 'confirmed'}
+                >
+                  推进到{STAGE_LABELS[nextStage as Stage]}
                 </Button>
               </Popconfirm>
             ) : (
@@ -215,6 +303,11 @@ function TaskDetail() {
               {STAGE_LABELS[detail.current_stage as Stage]}
             </Tag>
           </Descriptions.Item>
+          <Descriptions.Item label="需求状态">
+            <Tag color={detail.requirement_status === 'confirmed' ? 'green' : 'orange'}>
+              {detail.requirement_status === 'confirmed' ? '已确认' : '确认中'}
+            </Tag>
+          </Descriptions.Item>
           <Descriptions.Item label="创建时间">
             {new Date(detail.created_at).toLocaleString('zh-CN')}
           </Descriptions.Item>
@@ -222,6 +315,76 @@ function TaskDetail() {
             {new Date(detail.updated_at).toLocaleString('zh-CN')}
           </Descriptions.Item>
         </Descriptions>
+      </div>
+
+      <div className="page-surface requirements-panel">
+        <div className="section-heading">
+          <div>
+            <h3>需求确认</h3>
+            <p>产品经理阶段先沉淀需求对话，确认后才能进入开发。</p>
+          </div>
+          <Tag color={detail.requirement_status === 'confirmed' ? 'green' : 'orange'}>
+            {detail.requirement_status === 'confirmed' ? '已锁定' : '待确认'}
+          </Tag>
+        </div>
+        {nextStage === 'implement' && detail.requirement_status !== 'confirmed' && (
+          <Alert
+            type="warning"
+            showIcon
+            message="进入开发前需要确认需求"
+            style={{ marginBottom: 12 }}
+          />
+        )}
+        <div className="requirement-thread">
+          {requirements?.messages.length ? (
+            requirements.messages.map((item, index) => (
+              <div className={`requirement-message ${item.role}`} key={`${item.created_at}-${index}`}>
+                <Tag color={item.role === 'product_manager' ? 'blue' : 'default'}>
+                  {item.role === 'product_manager' ? '产品经理' : '用户'}
+                </Tag>
+                <span>{item.content}</span>
+              </div>
+            ))
+          ) : (
+            <p className="empty-copy">暂无需求对话</p>
+          )}
+        </div>
+        {detail.requirement_status !== 'confirmed' && (
+          <div className="requirement-inputs">
+            <TextArea
+              value={requirementMessage}
+              onChange={(event) => setRequirementMessage(event.target.value)}
+              rows={3}
+              placeholder="补充需求、约束或验收口径"
+            />
+            <Space style={{ marginTop: 8 }}>
+              <Button icon={<SendOutlined />} loading={requirementsLoading} onClick={handleAddRequirementMessage}>
+                记录补充
+              </Button>
+            </Space>
+          </div>
+        )}
+        <div className="requirement-inputs">
+          <TextArea
+            value={requirementSummary}
+            onChange={(event) => setRequirementSummary(event.target.value)}
+            rows={5}
+            disabled={detail.requirement_status === 'confirmed'}
+            placeholder="填写最终确认的需求摘要，确认后会写入产品规划"
+          />
+          {detail.requirement_status !== 'confirmed' && (
+            <Space style={{ marginTop: 8 }}>
+              <Button
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                loading={requirementsLoading}
+                onClick={handleConfirmRequirements}
+              >
+                确认需求
+              </Button>
+            </Space>
+          )}
+        </div>
       </div>
 
       <div className="page-surface agents-panel">

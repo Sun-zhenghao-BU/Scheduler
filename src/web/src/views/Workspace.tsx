@@ -15,7 +15,7 @@ function Workspace() {
   const [proposal, setProposal] = useState<DevelopmentProposal | null>(null);
   const [testCommand, setTestCommand] = useState('npm test');
   const [testResult, setTestResult] = useState<TestCommandResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [developing, setDeveloping] = useState(false);
   const [applying, setApplying] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -40,8 +40,28 @@ function Workspace() {
   }, []);
 
   useEffect(() => {
-    loadWorkspace();
-  }, [loadWorkspace]);
+    let active = true;
+    getWorkspaceInfo()
+      .then(async (workspaceInfo) => {
+        if (!active) return;
+        setInfo(workspaceInfo);
+        if (workspaceInfo.configured) {
+          const tree = await getWorkspaceTree();
+          if (active) setItems(tree);
+        } else {
+          setItems([]);
+        }
+      })
+      .catch(() => {
+        message.error('项目工作区加载失败');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const files = useMemo(() => items.filter(item => item.type === 'file'), [items]);
 

@@ -103,6 +103,7 @@
 }
 
 .task-summary,
+.requirements-panel,
 .agents-panel,
 .file-panel,
 .dashboard-page {
@@ -144,6 +145,48 @@
   color: #344054;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.requirement-thread {
+  display: flex;
+  max-height: 220px;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  overflow: auto;
+}
+
+.requirement-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.requirement-message.product_manager {
+  background: #eef5ff;
+}
+
+.requirement-message span:last-child {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.requirement-inputs {
+  margin-top: 12px;
+}
+
+.empty-copy {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
 }
 
 .file-panel .ant-tabs-nav {

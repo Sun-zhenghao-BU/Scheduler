@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { AgentResult, DevelopmentProposal, Task, TaskDetail, LLMConfig, TestCommandResult, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
+import type { AgentResult, DevelopmentProposal, Task, TaskDetail, LLMConfig, RequirementSession, TestCommandResult, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -43,6 +43,25 @@ export async function getAgentResults(taskId: string): Promise<AgentResult[]> {
 
 export async function runAgentWorkflow(taskId: string): Promise<AgentResult[]> {
   const { data } = await api.post<AgentResult[]>(`/tasks/${taskId}/agents/run`);
+  return data;
+}
+
+export async function getRequirements(taskId: string): Promise<RequirementSession> {
+  const { data } = await api.get<RequirementSession>(`/tasks/${taskId}/requirements`);
+  return data;
+}
+
+export async function addRequirementMessage(
+  taskId: string,
+  role: 'user' | 'product_manager',
+  content: string,
+): Promise<RequirementSession> {
+  const { data } = await api.post<RequirementSession>(`/tasks/${taskId}/requirements/messages`, { role, content });
+  return data;
+}
+
+export async function confirmRequirements(taskId: string, summary: string): Promise<Task> {
+  const { data } = await api.post<Task>(`/tasks/${taskId}/requirements/confirm`, { summary });
   return data;
 }
 
