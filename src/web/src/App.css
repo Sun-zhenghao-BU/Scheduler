@@ -163,8 +163,16 @@
 }
 
 .workspace-file-list {
-  max-height: calc(100vh - 260px);
+  max-height: calc(100vh - 410px);
   overflow: auto;
+}
+
+.developer-console {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 
 .workspace-file-item,
@@ -191,6 +199,23 @@
   color: #344054;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.diff-block {
+  margin-bottom: 16px;
+}
+
+.diff-block h4 {
+  margin: 0 0 8px;
+  color: #1f2937;
+}
+
+.diff-block pre {
+  padding: 12px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e5e7eb;
 }
 
 @media (max-width: 960px) {

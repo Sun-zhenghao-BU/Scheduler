@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from scheduler_automation.api.routes import llm, tasks, workspace
+from scheduler_automation.api.routes import development, llm, tasks, workspace
 
 
 def _static_dir() -> Path | None:
@@ -45,6 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router)
     app.include_router(llm.router)
     app.include_router(workspace.router)
+    app.include_router(development.router)
 
     app.state.root = root
 

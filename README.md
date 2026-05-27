@@ -99,11 +99,11 @@ This starts:
 - **FastAPI** on port 80 (accessible at `http://localhost`)
 - **API** under `/api/`
 - **Health check** at `/healthz`
-- **Read-only project workspace** mounted at `/workspace/project`
+- **Project workspace** mounted at `/workspace/project`
 
 FastAPI serves the built frontend and API from the same container.
 
-LLM config and task data are persisted in Docker volumes. The local path in `PROJECT_ROOT` is mounted read-only so agents can inspect code context without modifying your files.
+LLM config and task data are persisted in Docker volumes. The local path in `PROJECT_ROOT` is mounted into the container so approved changes can be written back to the project and become visible in PyCharm.
 
 ### Web UI + API Server (development)
 

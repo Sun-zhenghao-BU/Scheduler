@@ -34,6 +34,19 @@ export interface WorkspaceFile {
   size: number;
 }
 
+export interface FileChange {
+  path: string;
+  old_content: string;
+  new_content: string;
+  diff: string;
+}
+
+export interface DevelopmentProposal {
+  session_id: string;
+  summary: string;
+  changes: FileChange[];
+}
+
 export type AgentRole = 'product_manager' | 'developer' | 'tester';
 export type AgentStatus = 'completed' | 'failed';
 

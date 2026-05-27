@@ -81,6 +81,9 @@ class Workspace:
             "size": path.stat().st_size,
         }
 
+    def resolve_for_write(self, relative_path: str) -> Path:
+        return self._resolve(relative_path)
+
     def summary(self, limit: int = 200) -> str:
         lines = [f"项目根目录：{self.root}"]
         for item in self.tree(limit=limit):
