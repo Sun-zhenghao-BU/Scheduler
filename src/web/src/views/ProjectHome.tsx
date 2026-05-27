@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Empty, Form, Input, List, Modal, Space, Tag, message } from 'antd';
+import { Button, Empty, Form, Input, List, Modal, Space, Tag, Tree, message } from 'antd';
 import { FolderOpenOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
-import { createProject, listProjects } from '../api';
-import type { Project } from '../types';
+import { createProject, getWorkspaceTree, listProjects } from '../api';
+import type { Project, WorkspaceItem } from '../types';
 
 function ProjectHome() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [directoryModalOpen, setDirectoryModalOpen] = useState(false);
+  const [workspaceItems, setWorkspaceItems] = useState<WorkspaceItem[]>([]);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [form] = Form.useForm();
   const navigate = useNavigate();
 
@@ -41,13 +44,50 @@ function ProjectHome() {
     }
   };
 
+  const openDirectoryPicker = async () => {
+    setDirectoryModalOpen(true);
+    setWorkspaceLoading(true);
+    try {
+      setWorkspaceItems(await getWorkspaceTree());
+    } catch {
+      message.error('目录树加载失败');
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  };
+
+  const directoryTree = workspaceItems
+    .filter(item => item.type === 'directory')
+    .map(item => ({
+      title: item.path || '/',
+      key: item.path || '.',
+      isLeaf: true,
+    }));
+
   return (
     <div className="project-home">
-      <div className="page-surface project-entry">
+      <div className="project-actions">
+        <div className="page-surface project-action-card">
+          <h3>创建项目</h3>
+          <p>从一个新项目开始，把后续需求、开发和测试都收敛到这个项目里。</p>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+            创建项目
+          </Button>
+        </div>
+        <div className="page-surface project-action-card">
+          <h3>打开项目</h3>
+          <p>继续已有项目中的任务流，回到需求确认、开发或测试阶段。</p>
+          <Button icon={<FolderOpenOutlined />} onClick={() => document.getElementById('project-list')?.scrollIntoView({ behavior: 'smooth' })}>
+            查看已有项目
+          </Button>
+        </div>
+      </div>
+
+      <div id="project-list" className="page-surface project-entry">
         <div className="section-heading">
           <div>
-            <h3>选择项目</h3>
-            <p>先进入一个项目，再围绕这个项目创建需求、开发和测试任务。</p>
+            <h3>已有项目</h3>
+            <p>打开一个项目后，任务面板和项目工作区会在侧边栏中出现。</p>
           </div>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
             新建项目
@@ -105,9 +145,36 @@ function ProjectHome() {
             <Input placeholder="例如：Scheduler 自动化平台" />
           </Form.Item>
           <Form.Item name="root_path" label="本地目录（可选）">
-            <Input placeholder="例如：C:\\Users\\Zhenghao\\Project\\Scheduler" />
+            <Space.Compact style={{ width: '100%' }}>
+              <Input placeholder="选择已挂载目录，或手动输入路径" />
+              <Button onClick={openDirectoryPicker}>选择目录</Button>
+            </Space.Compact>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="选择已挂载目录"
+        open={directoryModalOpen}
+        onCancel={() => setDirectoryModalOpen(false)}
+        footer={null}
+      >
+        {workspaceLoading ? (
+          <Empty description="正在加载目录" />
+        ) : directoryTree.length === 0 ? (
+          <Empty description="当前挂载工作区没有可选目录" />
+        ) : (
+          <Tree
+            showIcon
+            treeData={directoryTree}
+            onSelect={(keys) => {
+              const selected = String(keys[0] || '');
+              if (!selected) return;
+              form.setFieldValue('root_path', selected === '.' ? '/workspace/project' : `/workspace/project/${selected}`);
+              setDirectoryModalOpen(false);
+            }}
+          />
+        )}
       </Modal>
     </div>
   );
