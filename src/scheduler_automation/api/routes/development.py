@@ -29,6 +29,13 @@ class DevelopRequest(BaseModel):
     paths: list[str] = []
 
 
+class TestFixRequest(BaseModel):
+    instruction: str = ""
+    paths: list[str] = []
+    test_command: str
+    test_output: str
+
+
 class FileChangeResponse(BaseModel):
     path: str
     old_content: str
@@ -77,33 +84,22 @@ async def propose_development(req: DevelopRequest):
         raise HTTPException(status_code=404, detail="项目目录未配置或不存在")
     if not req.instruction.strip():
         raise HTTPException(status_code=400, detail="请输入修改需求")
-    if not req.paths:
-        raise HTTPException(status_code=400, detail="请至少选择一个要修改的文件")
+    return await _create_proposal(workspace, req.instruction.strip(), req.paths)
 
-    selected_files: list[dict[str, str | int]] = []
-    try:
-        for path in req.paths:
-            selected_files.append(workspace.read_file(path))
-    except WorkspaceAccessError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
 
-    raw = await _ask_llm(req.instruction, selected_files)
-    summary, changes = _parse_llm_changes(workspace, raw)
-    session_id = uuid.uuid4().hex
-    payload = {
-        "session_id": session_id,
-        "summary": summary,
-        "changes": [change.to_dict() for change in changes],
-    }
-    (_sessions_dir() / f"{session_id}.json").write_text(
-        json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
-        encoding="utf-8",
+@router.post("/fix", response_model=DevelopProposalResponse)
+async def propose_test_fix(req: TestFixRequest):
+    workspace = _workspace()
+    if not workspace.exists():
+        raise HTTPException(status_code=404, detail="项目目录未配置或不存在")
+    if not req.test_output.strip():
+        raise HTTPException(status_code=400, detail="缺少测试失败输出")
+    instruction = (
+        f"原始需求：{req.instruction.strip() or '根据测试失败修复问题'}\n\n"
+        f"测试命令：{req.test_command}\n\n"
+        f"测试失败输出：\n{req.test_output}"
     )
-    return DevelopProposalResponse(
-        session_id=session_id,
-        summary=summary,
-        changes=[FileChangeResponse(**change.to_dict()) for change in changes],
-    )
+    return await _create_proposal(workspace, instruction, req.paths)
 
 
 @router.post("/apply", response_model=ApplyResponse)
@@ -134,6 +130,36 @@ def run_development_test(req: TestCommandRequest):
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=408, detail="测试命令执行超时")
     return TestCommandResponse(command=result.command, exit_code=result.exit_code, output=result.output)
+
+
+async def _create_proposal(workspace: Workspace, instruction: str, paths: list[str]) -> DevelopProposalResponse:
+    if not paths:
+        raise HTTPException(status_code=400, detail="请至少选择一个要修改的文件")
+
+    selected_files: list[dict[str, str | int]] = []
+    try:
+        for path in paths:
+            selected_files.append(workspace.read_file(path))
+    except WorkspaceAccessError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    raw = await _ask_llm(instruction, selected_files)
+    summary, changes = _parse_llm_changes(workspace, raw)
+    session_id = uuid.uuid4().hex
+    payload = {
+        "session_id": session_id,
+        "summary": summary,
+        "changes": [change.to_dict() for change in changes],
+    }
+    (_sessions_dir() / f"{session_id}.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
+        encoding="utf-8",
+    )
+    return DevelopProposalResponse(
+        session_id=session_id,
+        summary=summary,
+        changes=[FileChangeResponse(**change.to_dict()) for change in changes],
+    )
 
 
 async def _ask_llm(instruction: str, selected_files: list[dict[str, str | int]]) -> str:
