@@ -83,6 +83,7 @@ python -m scheduler_automation.cli show --task <task-id>
 Build and run the full stack:
 
 ```powershell
+$env:PROJECT_ROOT="D:\Work\YourProject"
 docker compose up -d --build
 ```
 
@@ -98,10 +99,11 @@ This starts:
 - **FastAPI** on port 80 (accessible at `http://localhost`)
 - **API** under `/api/`
 - **Health check** at `/healthz`
+- **Read-only project workspace** mounted at `/workspace/project`
 
 FastAPI serves the built frontend and API from the same container.
 
-LLM config and task data are persisted in Docker volumes.
+LLM config and task data are persisted in Docker volumes. The local path in `PROJECT_ROOT` is mounted read-only so agents can inspect code context without modifying your files.
 
 ### Web UI + API Server (development)
 
@@ -124,9 +126,9 @@ Then open `http://localhost:5173` in your browser.
 
 ### Configure LLM
 
-1. Go to **Settings** in the UI
-2. Enter your API Key, Base URL, and Model name
-3. Click **Test Connection** to verify
+1. Go to **系统设置** in the UI
+2. Enter your API Key, Base URL, and model name
+3. Click **测试连接** to verify
 4. Supported providers: OpenAI, DeepSeek, 通义千问, Ollama (any OpenAI-compatible API)
 
 ## Repository layout

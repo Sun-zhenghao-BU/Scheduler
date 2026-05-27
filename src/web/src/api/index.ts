@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { AgentResult, Task, TaskDetail, LLMConfig } from '../types';
+import type { AgentResult, Task, TaskDetail, LLMConfig, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -57,5 +57,20 @@ export async function updateLLMConfig(apiKey: string, baseUrl: string, model: st
 
 export async function validateLLMConfig(): Promise<{ valid: boolean; message: string }> {
   const { data } = await api.post('/llm/validate');
+  return data;
+}
+
+export async function getWorkspaceInfo(): Promise<WorkspaceInfo> {
+  const { data } = await api.get<WorkspaceInfo>('/workspace/');
+  return data;
+}
+
+export async function getWorkspaceTree(): Promise<WorkspaceItem[]> {
+  const { data } = await api.get<WorkspaceItem[]>('/workspace/tree');
+  return data;
+}
+
+export async function getWorkspaceFile(path: string): Promise<WorkspaceFile> {
+  const { data } = await api.get<WorkspaceFile>('/workspace/file', { params: { path } });
   return data;
 }

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from pathlib import Path
 
 from scheduler_automation.agents.provider import AgentProvider, AgentResult, AgentRole
+from scheduler_automation.workspace import Workspace
 from scheduler_automation.workflow import WorkflowManager
 
 AGENT_ROLES: tuple[AgentRole, ...] = ("product_manager", "developer", "tester")
@@ -53,4 +56,7 @@ def _task_context(task_dir) -> str:
         path = task_dir / file_name
         if path.exists():
             parts.append(f"## {file_name}\n\n{path.read_text(encoding='utf-8')}")
+    workspace = Workspace(Path(os.environ.get("SCHEDULER_PROJECT_ROOT", "/workspace/project")))
+    if workspace.exists():
+        parts.append(f"## 本地项目只读上下文\n\n{workspace.summary()}")
     return "\n\n".join(parts)

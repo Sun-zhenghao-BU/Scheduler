@@ -149,3 +149,52 @@
 .file-panel .ant-tabs-nav {
   margin-bottom: 12px;
 }
+
+.workspace-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.workspace-panel,
+.workspace-preview {
+  min-height: calc(100vh - 112px);
+  padding: 16px;
+}
+
+.workspace-file-list {
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+}
+
+.workspace-file-item,
+.workspace-directory-item {
+  cursor: pointer;
+  padding-inline: 8px !important;
+  border-radius: 6px;
+}
+
+.workspace-file-item:hover {
+  background: #eef5ff;
+}
+
+.workspace-directory-item {
+  color: #667085;
+  cursor: default;
+}
+
+.workspace-preview pre {
+  max-height: calc(100vh - 220px);
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #344054;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 960px) {
+  .workspace-layout {
+    grid-template-columns: 1fr;
+  }
+}

@@ -17,6 +17,23 @@ export interface LLMConfig {
   has_api_key: boolean;
 }
 
+export interface WorkspaceInfo {
+  configured: boolean;
+  root: string;
+}
+
+export interface WorkspaceItem {
+  path: string;
+  name: string;
+  type: 'directory' | 'file';
+}
+
+export interface WorkspaceFile {
+  path: string;
+  content: string;
+  size: number;
+}
+
 export type AgentRole = 'product_manager' | 'developer' | 'tester';
 export type AgentStatus = 'completed' | 'failed';
 
