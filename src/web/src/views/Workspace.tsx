@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Checkbox, Empty, Input, List, message, Space, Tag } from 'antd';
 import { FileTextOutlined, FolderOutlined, ReloadOutlined } from '@ant-design/icons';
-import { applyDevelopment, getWorkspaceFile, getWorkspaceInfo, getWorkspaceTree, proposeDevelopment } from '../api';
-import type { DevelopmentProposal, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
+import { applyDevelopment, getWorkspaceFile, getWorkspaceInfo, getWorkspaceTree, proposeDevelopment, runDevelopmentTest } from '../api';
+import type { DevelopmentProposal, TestCommandResult, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
 
 const { TextArea } = Input;
 
@@ -13,9 +13,12 @@ function Workspace() {
   const [checkedPaths, setCheckedPaths] = useState<string[]>([]);
   const [instruction, setInstruction] = useState('');
   const [proposal, setProposal] = useState<DevelopmentProposal | null>(null);
+  const [testCommand, setTestCommand] = useState('npm test');
+  const [testResult, setTestResult] = useState<TestCommandResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [developing, setDeveloping] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   const loadWorkspace = useCallback(async () => {
     setLoading(true);
@@ -97,6 +100,28 @@ function Workspace() {
     }
   };
 
+  const handleRunTest = async () => {
+    if (!testCommand.trim()) {
+      message.warning('请输入测试命令');
+      return;
+    }
+    setTesting(true);
+    try {
+      const result = await runDevelopmentTest(testCommand.trim());
+      setTestResult(result);
+      if (result.exit_code === 0) {
+        message.success('测试命令执行成功');
+      } else {
+        message.warning(`测试命令退出码：${result.exit_code}`);
+      }
+    } catch (err: unknown) {
+      const error = err as Error;
+      message.error(`测试命令执行失败：${error.message}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div className="workspace-layout">
       <div className="page-surface workspace-panel">
@@ -139,6 +164,22 @@ function Workspace() {
               生成修改方案
             </Button>
             <Tag>{checkedPaths.length} 个文件已选择</Tag>
+          </Space>
+        </div>
+
+        <div className="developer-console">
+          <Input
+            value={testCommand}
+            onChange={(event) => setTestCommand(event.target.value)}
+            placeholder="输入测试命令，例如 npm test、pytest、python -m pytest"
+          />
+          <Space style={{ marginTop: 10 }}>
+            <Button loading={testing} onClick={handleRunTest}>
+              运行测试
+            </Button>
+            <Tag color={testResult?.exit_code === 0 ? 'green' : testResult ? 'red' : 'default'}>
+              {testResult ? `退出码 ${testResult.exit_code}` : '未运行'}
+            </Tag>
           </Space>
         </div>
 
@@ -202,6 +243,13 @@ function Workspace() {
           </>
         ) : (
           <Empty description="选择一个文件查看内容" />
+        )}
+
+        {testResult && (
+          <div className="test-output">
+            <h4>测试输出：{testResult.command}</h4>
+            <pre>{testResult.output || '命令没有输出'}</pre>
+          </div>
         )}
       </div>
     </div>

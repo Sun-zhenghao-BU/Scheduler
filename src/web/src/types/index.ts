@@ -47,6 +47,12 @@ export interface DevelopmentProposal {
   changes: FileChange[];
 }
 
+export interface TestCommandResult {
+  command: string;
+  exit_code: number;
+  output: string;
+}
+
 export type AgentRole = 'product_manager' | 'developer' | 'tester';
 export type AgentStatus = 'completed' | 'failed';
 

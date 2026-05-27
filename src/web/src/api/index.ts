@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { AgentResult, DevelopmentProposal, Task, TaskDetail, LLMConfig, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
+import type { AgentResult, DevelopmentProposal, Task, TaskDetail, LLMConfig, TestCommandResult, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -82,5 +82,10 @@ export async function proposeDevelopment(instruction: string, paths: string[]): 
 
 export async function applyDevelopment(sessionId: string): Promise<{ written: string[] }> {
   const { data } = await api.post<{ written: string[] }>('/development/apply', { session_id: sessionId });
+  return data;
+}
+
+export async function runDevelopmentTest(command: string): Promise<TestCommandResult> {
+  const { data } = await api.post<TestCommandResult>('/development/test', { command });
   return data;
 }

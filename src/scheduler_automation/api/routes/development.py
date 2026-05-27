@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from scheduler_automation.development import FileChange, apply_changes, build_change
+from scheduler_automation.development import (
+    DevelopmentCommandError,
+    FileChange,
+    apply_changes,
+    build_change,
+    run_test_command,
+)
 from scheduler_automation.llm.client import LLMClient, get_llm_config
 from scheduler_automation.workspace import Workspace, WorkspaceAccessError
 
@@ -41,6 +48,16 @@ class ApplyRequest(BaseModel):
 
 class ApplyResponse(BaseModel):
     written: list[str]
+
+
+class TestCommandRequest(BaseModel):
+    command: str
+
+
+class TestCommandResponse(BaseModel):
+    command: str
+    exit_code: int
+    output: str
 
 
 def _workspace() -> Workspace:
@@ -101,6 +118,22 @@ def apply_development(req: ApplyRequest):
     except WorkspaceAccessError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return ApplyResponse(written=written)
+
+
+@router.post("/test", response_model=TestCommandResponse)
+def run_development_test(req: TestCommandRequest):
+    workspace = _workspace()
+    if not workspace.exists():
+        raise HTTPException(status_code=404, detail="项目目录未配置或不存在")
+    try:
+        result = run_test_command(workspace, req.command)
+    except DevelopmentCommandError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail="测试命令不存在，请确认项目环境已安装")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=408, detail="测试命令执行超时")
+    return TestCommandResponse(command=result.command, exit_code=result.exit_code, output=result.output)
 
 
 async def _ask_llm(instruction: str, selected_files: list[dict[str, str | int]]) -> str:
