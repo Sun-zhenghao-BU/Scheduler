@@ -1,0 +1,151 @@
+.app-shell {
+  min-height: 100vh;
+  background: #eef2f6;
+}
+
+.app-sidebar {
+  border-right: 1px solid #d9e1ea;
+  box-shadow: 8px 0 24px rgba(39, 55, 77, 0.06);
+  z-index: 2;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 16px 20px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background: #1f6feb;
+  color: #fff;
+  font-weight: 700;
+}
+
+.brand-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.brand-copy strong {
+  color: #1f2937;
+  font-size: 15px;
+}
+
+.brand-copy span {
+  color: #697586;
+  font-size: 11px;
+}
+
+.sidebar-menu {
+  border-inline-end: 0 !important;
+  padding: 0 10px;
+}
+
+.sidebar-menu .ant-menu-item {
+  height: 42px;
+  margin: 4px 0;
+  border-radius: 8px;
+  color: #475467;
+  transition: background 120ms ease, color 120ms ease, transform 80ms ease;
+}
+
+.sidebar-menu .ant-menu-item:hover {
+  background: #eef5ff !important;
+  color: #1f6feb !important;
+}
+
+.sidebar-menu .ant-menu-item:active {
+  transform: scale(0.98);
+}
+
+.sidebar-menu .ant-menu-item-selected {
+  background: #dbeafe !important;
+  color: #174ea6 !important;
+  font-weight: 600;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  height: 64px;
+  padding: 0 28px;
+  background: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid #d9e1ea;
+  backdrop-filter: blur(8px);
+}
+
+.app-header h3 {
+  margin: 0;
+  color: #1f2937;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.app-content {
+  margin: 0;
+  padding: 24px;
+  background: #eef2f6;
+}
+
+.page-surface {
+  background: #fff;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(39, 55, 77, 0.06);
+}
+
+.task-summary,
+.agents-panel,
+.file-panel,
+.dashboard-page {
+  margin-bottom: 16px;
+  padding: 16px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.section-heading h3 {
+  margin: 0 0 4px;
+  color: #1f2937;
+  font-size: 15px;
+}
+
+.section-heading p {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.agent-card {
+  height: 100%;
+  border-radius: 8px;
+}
+
+.agent-card pre {
+  min-height: 120px;
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #344054;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.file-panel .ant-tabs-nav {
+  margin-bottom: 12px;
+}

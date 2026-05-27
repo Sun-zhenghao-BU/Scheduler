@@ -89,7 +89,7 @@ class WorkflowManager:
         metadata.current_stage = stage
         metadata.updated_at = utc_timestamp()
         self._write_metadata(task_dir, metadata)
-        self.append_log(task_id, stage, f"Stage advanced to {stage}")
+        self.append_log(task_id, stage, f"阶段已推进到 {stage}")
         return metadata
 
     def append_log(self, task_id: str, stage: str, message: str) -> None:
@@ -133,52 +133,52 @@ class WorkflowManager:
         )
 
     def _request_template(self, title: str, request: str) -> str:
-        body = request.strip() or "- Fill in the exact request from the user.\n"
+        body = request.strip() or "- 请填写用户的原始需求。\n"
         return (
-            f"# Request\n\n"
-            f"## Title\n\n{title.strip()}\n\n"
-            f"## Raw input\n\n{body}\n"
+            f"# 需求\n\n"
+            f"## 标题\n\n{title.strip()}\n\n"
+            f"## 原始输入\n\n{body}\n"
         )
 
     def _spec_template(self, title: str) -> str:
         return (
-            f"# OpenSpec\n\n"
-            f"## Problem\n\n{title.strip()}\n\n"
-            f"## Scope\n\n- Define the in-scope work.\n\n"
-            f"## Out of scope\n\n- Define what is explicitly excluded.\n\n"
-            f"## Acceptance criteria\n\n- Add measurable criteria.\n\n"
-            f"## Architecture notes\n\n- Document major decisions.\n\n"
-            f"## Risks\n\n- Capture technical and delivery risks.\n"
+            f"# 产品规划\n\n"
+            f"## 问题\n\n{title.strip()}\n\n"
+            f"## 范围\n\n- 定义本次要完成的内容。\n\n"
+            f"## 不做什么\n\n- 明确本次不包含的内容。\n\n"
+            f"## 验收标准\n\n- 补充可验证的验收条件。\n\n"
+            f"## 架构说明\n\n- 记录关键技术决策。\n\n"
+            f"## 风险\n\n- 记录技术和交付风险。\n"
         )
 
     def _implementation_template(self) -> str:
         return (
-            "# Superpower Implementation\n\n"
-            "## Plan\n\n- Break work into concrete steps.\n\n"
-            "## Code changes\n\n- Record files and decisions.\n\n"
-            "## Verification\n\n- Record commands and outcomes.\n"
+            "# 实施方案\n\n"
+            "## 计划\n\n- 拆分具体实施步骤。\n\n"
+            "## 代码变更\n\n- 记录要修改的文件和关键决策。\n\n"
+            "## 验证\n\n- 记录验证命令和结果。\n"
         )
 
     def _review_template(self) -> str:
         return (
-            "# Review\n\n"
-            "## Self-review\n\n- Validate correctness, regressions, and gaps.\n\n"
-            "## Code review findings\n\n- Record bugs, risks, or cleanup items.\n"
+            "# 测试方案\n\n"
+            "## 自测\n\n- 验证正确性、回归风险和遗漏点。\n\n"
+            "## 评审发现\n\n- 记录问题、风险和清理项。\n"
         )
 
     def _fixes_template(self) -> str:
         return (
-            "# Fixes\n\n"
-            "## Bugs addressed\n\n- Record bug fixes.\n\n"
-            "## Retest notes\n\n- Describe what was rechecked.\n"
+            "# 修复记录\n\n"
+            "## 已修复问题\n\n- 记录修复内容。\n\n"
+            "## 复测说明\n\n- 描述重新验证的内容。\n"
         )
 
     def _release_template(self) -> str:
         return (
-            "# Release\n\n"
-            "## Push checklist\n\n- Commit changes.\n- Push branch.\n- Deploy.\n\n"
-            "## Notes\n\n- Add release summary.\n"
+            "# 发布记录\n\n"
+            "## 发布检查\n\n- 提交变更。\n- 推送分支。\n- 部署。\n\n"
+            "## 说明\n\n- 补充发布摘要。\n"
         )
 
     def _journal_template(self) -> str:
-        return "# Journal\n\n"
+        return "# 日志\n\n"

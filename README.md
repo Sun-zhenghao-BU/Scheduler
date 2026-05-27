@@ -68,6 +68,8 @@ The practical split is:
 
 ## Quick start
 
+### CLI (original)
+
 ```powershell
 python -m scheduler_automation.cli new-task --title "Build automated GitHub workflow"
 python -m scheduler_automation.cli status
@@ -76,15 +78,69 @@ python -m scheduler_automation.cli log --task <task-id> --stage review --message
 python -m scheduler_automation.cli show --task <task-id>
 ```
 
+### Docker (recommended for production)
+
+Build and run the full stack:
+
+```powershell
+docker compose up -d --build
+```
+
+If Docker Hub access is slow or blocked, pull the base images first:
+
+```powershell
+docker pull node:24-alpine
+docker pull python:3.13-slim
+docker compose up -d --build
+```
+
+This starts:
+- **FastAPI** on port 80 (accessible at `http://localhost`)
+- **API** under `/api/`
+- **Health check** at `/healthz`
+
+FastAPI serves the built frontend and API from the same container.
+
+LLM config and task data are persisted in Docker volumes.
+
+### Web UI + API Server (development)
+
+Start the FastAPI backend:
+
+```powershell
+pip install -e ".[server]"
+uvicorn scheduler_automation.api.app:app --host 0.0.0.0 --port 8000
+```
+
+Start the frontend dev server:
+
+```powershell
+cd src/web
+npm install
+npm run dev
+```
+
+Then open `http://localhost:5173` in your browser.
+
+### Configure LLM
+
+1. Go to **Settings** in the UI
+2. Enter your API Key, Base URL, and Model name
+3. Click **Test Connection** to verify
+4. Supported providers: OpenAI, DeepSeek, 通义千问, Ollama (any OpenAI-compatible API)
+
 ## Repository layout
 
 ```text
-.codex/                   Codex skills used in this repo
-docs/                     Architecture notes
-openspec/                 OpenSpec configuration
-tasks/                    Generated workflow workspaces
-src/scheduler_automation/ CLI and workflow engine
-tests/                    Standard-library test suite
+.codex/                          Codex skills used in this repo
+docs/                            Architecture notes
+openspec/                        OpenSpec configuration
+tasks/                           Generated workflow workspaces
+src/scheduler_automation/        CLI, workflow engine, and API server
+src/scheduler_automation/api/    FastAPI routes (tasks, LLM, config)
+src/scheduler_automation/llm/    LLM client and prompt templates
+src/web/                         React frontend (Vite + TypeScript + Ant Design)
+tests/                           Standard-library test suite
 ```
 
 ## Git workflow

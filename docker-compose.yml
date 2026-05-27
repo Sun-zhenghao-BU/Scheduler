@@ -1,0 +1,24 @@
+services:
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NPM_REGISTRY: https://registry.npmmirror.com
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+    container_name: scheduler
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - scheduler-data:/root/.scheduler
+      - ./tasks:/app/tasks
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/healthz', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  scheduler-data:

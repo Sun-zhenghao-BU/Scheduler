@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.venv
+.codex
+docs
+openspec
+tests
+tasks
+
+src/web/node_modules
+*.md
+!README.md
+*.log
