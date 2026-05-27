@@ -19,6 +19,7 @@ def get_manager() -> WorkflowManager:
 class CreateTaskRequest(BaseModel):
     title: str
     request: str = ""
+    project_id: str = ""
 
 
 class AdvanceTaskRequest(BaseModel):
@@ -36,6 +37,7 @@ class TaskResponse(BaseModel):
     current_stage: str
     created_at: str
     updated_at: str
+    project_id: str = ""
     requirement_status: str = "drafting"
     requirement_confirmed_at: str = ""
 
@@ -46,6 +48,7 @@ class TaskDetailResponse(BaseModel):
     current_stage: str
     created_at: str
     updated_at: str
+    project_id: str = ""
     requirement_status: str = "drafting"
     requirement_confirmed_at: str = ""
     files: dict[str, str]
@@ -90,7 +93,7 @@ def list_tasks():
 @router.post("/", response_model=TaskResponse)
 def create_task(req: CreateTaskRequest):
     manager = get_manager()
-    metadata = manager.create_task(req.title, req.request)
+    metadata = manager.create_task(req.title, req.request, project_id=req.project_id)
     return TaskResponse(**asdict(metadata))
 
 
@@ -116,6 +119,7 @@ def get_task(task_id: str):
         current_stage=metadata.current_stage,
         created_at=metadata.created_at,
         updated_at=metadata.updated_at,
+        project_id=metadata.project_id,
         requirement_status=metadata.requirement_status,
         requirement_confirmed_at=metadata.requirement_confirmed_at,
         files=files,

@@ -1,9 +1,52 @@
 import { useState, useEffect } from 'react';
-import { Form, Input, Button, Card, message, Space, Typography } from 'antd';
+import { Form, Input, Button, Card, message, Select, Space, Typography } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, SaveOutlined } from '@ant-design/icons';
 import { getLLMConfig, updateLLMConfig, validateLLMConfig } from '../api';
 
 const { Text } = Typography;
+
+const PROVIDERS = [
+  {
+    value: 'dashscope-cn',
+    label: '通义千问 DashScope（国内）',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-plus',
+  },
+  {
+    value: 'dashscope-intl',
+    label: '通义千问 DashScope（国际）',
+    baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-plus',
+  },
+  {
+    value: 'deepseek',
+    label: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+  },
+  {
+    value: 'openai',
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+  },
+  {
+    value: 'ollama',
+    label: 'Ollama（Docker 访问本机）',
+    baseUrl: 'http://host.docker.internal:11434/v1',
+    model: 'qwen2.5:7b',
+  },
+  {
+    value: 'custom',
+    label: '自定义 OpenAI 兼容接口',
+    baseUrl: '',
+    model: '',
+  },
+] as const;
+
+function providerFromBaseUrl(baseUrl: string): string {
+  return PROVIDERS.find(provider => provider.baseUrl && provider.baseUrl === baseUrl)?.value || 'custom';
+}
 
 function Settings() {
   const [form] = Form.useForm();
@@ -17,6 +60,7 @@ function Settings() {
       try {
         const config = await getLLMConfig();
         form.setFieldsValue({
+          provider: providerFromBaseUrl(config.base_url),
           base_url: config.base_url,
           model: config.model,
         });
@@ -27,6 +71,16 @@ function Settings() {
     };
     load();
   }, [form]);
+
+  const handleProviderChange = (value: string) => {
+    const provider = PROVIDERS.find(item => item.value === value);
+    if (!provider || provider.value === 'custom') return;
+    form.setFieldsValue({
+      base_url: provider.baseUrl,
+      model: provider.model,
+    });
+    setValidationResult(null);
+  };
 
   const handleSave = async (values: { api_key?: string; base_url: string; model: string }) => {
     setSaving(true);
@@ -73,14 +127,19 @@ function Settings() {
           layout="vertical"
           onFinish={handleSave}
           initialValues={{
-            base_url: 'https://api.openai.com/v1',
-            model: 'gpt-4',
+            provider: 'dashscope-cn',
+            base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            model: 'qwen-plus',
           }}
         >
+          <Form.Item name="provider" label="供应商">
+            <Select options={PROVIDERS.map(({ value, label }) => ({ value, label }))} onChange={handleProviderChange} />
+          </Form.Item>
+
           <Form.Item
             name="api_key"
             label="API 密钥"
-            extra="API 密钥仅保存在本地配置中"
+            extra={hasKey ? '已保存密钥；留空保存不会覆盖原密钥' : 'API 密钥仅保存在本地配置中'}
           >
             <Input.Password
               placeholder="sk-..."
@@ -126,19 +185,16 @@ function Settings() {
 
       <Card style={{ marginTop: 16 }} title="常用配置" size="small">
         <Typography>
-          <Text strong>常用接口地址：</Text>
+          <Text strong>选择供应商会自动填入接口地址和默认模型。</Text>
           <ul style={{ marginTop: 8 }}>
             <li>
-              <Text code>OpenAI</Text> - 接口地址：<Text code>https://api.openai.com/v1</Text>
+              <Text code>DashScope 国内</Text> - <Text code>qwen-plus</Text>
             </li>
             <li>
-              <Text code>DeepSeek</Text> - 接口地址：<Text code>https://api.deepseek.com/v1</Text>
+              <Text code>DeepSeek</Text> - <Text code>deepseek-chat</Text>
             </li>
             <li>
-              <Text code>通义千问</Text> - 接口地址：<Text code>https://dashscope.aliyuncs.com/compatible-mode/v1</Text>
-            </li>
-            <li>
-              <Text code>Ollama（本地）</Text> - 接口地址：<Text code>http://localhost:11434/v1</Text>
+              <Text code>Ollama</Text> - Docker 内访问本机用 <Text code>host.docker.internal</Text>
             </li>
           </ul>
         </Typography>

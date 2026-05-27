@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Table, Button, Tag, Space, Modal, Form, Input, message } from 'antd';
 import { PlusOutlined, EyeOutlined } from '@ant-design/icons';
-import { listTasks, createTask } from '../api';
-import type { Task } from '../types';
+import { createTask, getProject, listProjectTasks } from '../api';
+import type { Project, Task } from '../types';
 import { STAGES, STAGE_LABELS, STAGE_COLORS, type Stage } from '../types';
 
 interface Props {
@@ -11,6 +11,8 @@ interface Props {
 }
 
 function Dashboard({ onTaskSelect }: Props) {
+  const { projectId } = useParams<{ projectId: string }>();
+  const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -18,20 +20,29 @@ function Dashboard({ onTaskSelect }: Props) {
   const navigate = useNavigate();
 
   const fetchTasks = useCallback(async () => {
+    if (!projectId) return;
     setLoading(true);
     try {
-      const data = await listTasks();
+      const data = await listProjectTasks(projectId);
       setTasks(data);
     } catch {
       message.error('任务列表加载失败');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
+    if (!projectId) return;
     let active = true;
-    listTasks()
+    getProject(projectId)
+      .then((data) => {
+        if (active) setProject(data);
+      })
+      .catch(() => {
+        message.error('项目加载失败');
+      });
+    listProjectTasks(projectId)
       .then((data) => {
         if (active) setTasks(data);
       })
@@ -44,11 +55,12 @@ function Dashboard({ onTaskSelect }: Props) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [projectId]);
 
   const handleCreate = async (values: { title: string; request?: string }) => {
+    if (!projectId) return;
     try {
-      await createTask(values.title, values.request || '');
+      await createTask(values.title, values.request || '', projectId);
       message.success('任务已创建');
       setModalOpen(false);
       form.resetFields();
@@ -109,7 +121,7 @@ function Dashboard({ onTaskSelect }: Props) {
             icon={<EyeOutlined />}
             onClick={() => {
               onTaskSelect(record.title);
-              navigate(`/task/${record.task_id}`);
+              navigate(`/projects/${record.project_id}/task/${record.task_id}`);
             }}
           >
             查看
@@ -123,9 +135,9 @@ function Dashboard({ onTaskSelect }: Props) {
     <div className="page-surface dashboard-page">
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h2 style={{ margin: 0 }}>任务</h2>
+          <h2 style={{ margin: 0 }}>{project?.name || '项目任务'}</h2>
           <p style={{ margin: '4px 0 0', color: '#667085', fontSize: 12 }}>
-            创建任务后，在任务详情页运行产品、开发、测试三类代理。
+            在当前项目内创建需求，然后按需求确认、开发、测试推进。
           </p>
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>

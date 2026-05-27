@@ -24,9 +24,12 @@ def get_llm_config() -> dict[str, str]:
 
 
 def save_llm_config(api_key: str, base_url: str, model: str) -> None:
+    existing_api_key = ""
+    if CONFIG_PATH.exists():
+        existing_api_key = get_llm_config().get("api_key", "")
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(
-        json.dumps({"api_key": api_key, "base_url": base_url, "model": model}, indent=2),
+        json.dumps({"api_key": api_key or existing_api_key, "base_url": base_url, "model": model}, indent=2),
         encoding="utf-8",
     )
 

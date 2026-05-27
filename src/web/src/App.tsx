@@ -4,10 +4,12 @@ import zhCN from 'antd/locale/zh_CN';
 import {
   DashboardOutlined,
   FolderOpenOutlined,
+  HomeOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import { useState } from 'react';
 import Dashboard from './views/Dashboard';
+import ProjectHome from './views/ProjectHome';
 import TaskDetail from './views/TaskDetail';
 import Settings from './views/Settings';
 import Workspace from './views/Workspace';
@@ -15,20 +17,30 @@ import './App.css';
 
 const { Header, Content, Sider } = Layout;
 
-const MENU_ITEMS = [
-  { key: 'dashboard', icon: <DashboardOutlined />, label: '任务面板', path: '/' },
-  { key: 'workspace', icon: <FolderOpenOutlined />, label: '项目工作区', path: '/workspace' },
-  { key: 'settings', icon: <SettingOutlined />, label: '系统设置', path: '/settings' },
-];
-
 function AppShell() {
   const [currentTask, setCurrentTask] = useState<string | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
+  const projectMatch = location.pathname.match(/^\/projects\/([^/]+)/);
+  const projectId = projectMatch?.[1] || '';
+  const menuItems = [
+    { key: 'projects', icon: <HomeOutlined />, label: '项目', path: '/' },
+    ...(projectId
+      ? [
+          { key: 'dashboard', icon: <DashboardOutlined />, label: '任务面板', path: `/projects/${projectId}` },
+          { key: 'workspace', icon: <FolderOpenOutlined />, label: '项目工作区', path: `/projects/${projectId}/workspace` },
+        ]
+      : []),
+    { key: 'settings', icon: <SettingOutlined />, label: '系统设置', path: '/settings' },
+  ];
   const selectedKey = location.pathname.startsWith('/settings')
     ? 'settings'
-    : location.pathname.startsWith('/workspace')
+    : location.pathname.includes('/workspace')
       ? 'workspace'
+      : location.pathname.startsWith('/projects/')
+        ? 'dashboard'
+        : location.pathname === '/'
+          ? 'projects'
       : 'dashboard';
 
   return (
@@ -45,9 +57,9 @@ function AppShell() {
             className="sidebar-menu"
             mode="inline"
             selectedKeys={[selectedKey]}
-            items={MENU_ITEMS}
+            items={menuItems}
             onClick={({ key }) => {
-              const item = MENU_ITEMS.find(i => i.key === key);
+              const item = menuItems.find(i => i.key === key);
               if (item) navigate(item.path);
             }}
           />
@@ -60,9 +72,10 @@ function AppShell() {
           </Header>
           <Content className="app-content">
             <Routes>
-              <Route path="/" element={<Dashboard onTaskSelect={setCurrentTask} />} />
-              <Route path="/task/:taskId" element={<TaskDetail />} />
-              <Route path="/workspace" element={<Workspace />} />
+              <Route path="/" element={<ProjectHome />} />
+              <Route path="/projects/:projectId" element={<Dashboard onTaskSelect={setCurrentTask} />} />
+              <Route path="/projects/:projectId/task/:taskId" element={<TaskDetail />} />
+              <Route path="/projects/:projectId/workspace" element={<Workspace />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

@@ -4,8 +4,17 @@ export interface Task {
   current_stage: string;
   created_at: string;
   updated_at: string;
+  project_id: string;
   requirement_status: 'drafting' | 'confirmed';
   requirement_confirmed_at: string;
+}
+
+export interface Project {
+  project_id: string;
+  name: string;
+  root_path: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TaskDetail extends Task {

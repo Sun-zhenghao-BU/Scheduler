@@ -106,9 +106,28 @@
 .requirements-panel,
 .agents-panel,
 .file-panel,
-.dashboard-page {
+.dashboard-page,
+.project-entry {
   margin-bottom: 16px;
   padding: 16px;
+}
+
+.project-home {
+  max-width: 980px;
+}
+
+.project-item {
+  padding-inline: 8px !important;
+  border-radius: 8px;
+}
+
+.project-item:hover {
+  background: #f8fafc;
+}
+
+.project-icon {
+  color: #1f6feb;
+  font-size: 22px;
 }
 
 .section-heading {

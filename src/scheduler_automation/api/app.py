@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from scheduler_automation.api.routes import development, llm, tasks, workspace
+from scheduler_automation.api.routes import development, llm, projects, tasks, workspace
 
 
 def _static_dir() -> Path | None:
@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    app.include_router(projects.router)
     app.include_router(tasks.router)
     app.include_router(llm.router)
     app.include_router(workspace.router)

@@ -27,6 +27,7 @@ class TaskMetadata:
     current_stage: str
     created_at: str
     updated_at: str
+    project_id: str = ""
     requirement_status: str = "drafting"
     requirement_confirmed_at: str = ""
 
@@ -51,7 +52,7 @@ class WorkflowManager:
         self.tasks_dir = self.root / "tasks"
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
 
-    def create_task(self, title: str, request: str = "") -> TaskMetadata:
+    def create_task(self, title: str, request: str = "", project_id: str = "") -> TaskMetadata:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         task_id = f"{timestamp}-{slugify(title)}"
         task_dir = self.tasks_dir / task_id
@@ -64,6 +65,7 @@ class WorkflowManager:
             current_stage="intake",
             created_at=now,
             updated_at=now,
+            project_id=project_id,
         )
         self._write_metadata(task_dir, metadata)
 
@@ -82,14 +84,16 @@ class WorkflowManager:
 
         return metadata
 
-    def list_tasks(self) -> list[TaskMetadata]:
+    def list_tasks(self, project_id: str | None = None) -> list[TaskMetadata]:
         results: list[TaskMetadata] = []
         for task_dir in sorted(self.tasks_dir.iterdir()):
             if not task_dir.is_dir():
                 continue
             metadata_file = task_dir / "metadata.json"
             if metadata_file.exists():
-                results.append(self._read_metadata(metadata_file))
+                metadata = self._read_metadata(metadata_file)
+                if project_id is None or metadata.project_id == project_id:
+                    results.append(metadata)
         return results
 
     def get_task(self, task_id: str) -> tuple[TaskMetadata, Path]:

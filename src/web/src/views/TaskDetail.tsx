@@ -46,7 +46,7 @@ const FILE_LABELS: Record<string, string> = {
 };
 
 function TaskDetail() {
-  const { taskId } = useParams<{ taskId: string }>();
+  const { projectId, taskId } = useParams<{ projectId: string; taskId: string }>();
   const navigate = useNavigate();
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -263,7 +263,7 @@ function TaskDetail() {
       <Button
         type="link"
         icon={<ArrowLeftOutlined />}
-        onClick={() => navigate('/')}
+        onClick={() => navigate(projectId ? `/projects/${projectId}` : '/')}
         style={{ marginBottom: 16, paddingLeft: 0 }}
       >
         返回任务列表

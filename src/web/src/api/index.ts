@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { AgentResult, DevelopmentProposal, Task, TaskDetail, LLMConfig, RequirementSession, TestCommandResult, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
+import type { AgentResult, DevelopmentProposal, Project, Task, TaskDetail, LLMConfig, RequirementSession, TestCommandResult, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -7,13 +7,33 @@ const api = axios.create({
 });
 
 // Tasks
+export async function listProjects(): Promise<Project[]> {
+  const { data } = await api.get<Project[]>('/projects/');
+  return data;
+}
+
+export async function createProject(name: string, rootPath = ''): Promise<Project> {
+  const { data } = await api.post<Project>('/projects/', { name, root_path: rootPath });
+  return data;
+}
+
+export async function getProject(projectId: string): Promise<Project> {
+  const { data } = await api.get<Project>(`/projects/${projectId}`);
+  return data;
+}
+
+export async function listProjectTasks(projectId: string): Promise<Task[]> {
+  const { data } = await api.get<Task[]>(`/projects/${projectId}/tasks`);
+  return data;
+}
+
 export async function listTasks(): Promise<Task[]> {
   const { data } = await api.get<Task[]>('/tasks/');
   return data;
 }
 
-export async function createTask(title: string, request = ''): Promise<Task> {
-  const { data } = await api.post<Task>('/tasks/', { title, request });
+export async function createTask(title: string, request = '', projectId = ''): Promise<Task> {
+  const { data } = await api.post<Task>('/tasks/', { title, request, project_id: projectId });
   return data;
 }
 
