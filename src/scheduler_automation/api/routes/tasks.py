@@ -36,6 +36,8 @@ class TaskResponse(BaseModel):
     current_stage: str
     created_at: str
     updated_at: str
+    requirement_status: str = "drafting"
+    requirement_confirmed_at: str = ""
 
 
 class TaskDetailResponse(BaseModel):
@@ -53,6 +55,27 @@ class AgentResultResponse(BaseModel):
     status: str
     content: str
     error: str = ""
+
+
+class RequirementMessageRequest(BaseModel):
+    role: str
+    content: str
+
+
+class RequirementConfirmRequest(BaseModel):
+    summary: str
+
+
+class RequirementMessageResponse(BaseModel):
+    role: str
+    content: str
+    created_at: str
+
+
+class RequirementSessionResponse(BaseModel):
+    status: str
+    summary: str
+    messages: list[RequirementMessageResponse]
 
 
 @router.get("/", response_model=list[TaskResponse])
@@ -104,6 +127,48 @@ def get_agents(task_id: str):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     return [AgentResultResponse(**result.to_dict()) for result in results]
+
+
+@router.get("/{task_id}/requirements", response_model=RequirementSessionResponse)
+def get_requirements(task_id: str):
+    manager = get_manager()
+    try:
+        session = manager.load_requirement_session(task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return RequirementSessionResponse(
+        status=session.status,
+        summary=session.summary,
+        messages=[RequirementMessageResponse(**asdict(message)) for message in session.messages],
+    )
+
+
+@router.post("/{task_id}/requirements/messages", response_model=RequirementSessionResponse)
+def add_requirement_message(task_id: str, req: RequirementMessageRequest):
+    manager = get_manager()
+    try:
+        session = manager.append_requirement_message(task_id, req.role, req.content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return RequirementSessionResponse(
+        status=session.status,
+        summary=session.summary,
+        messages=[RequirementMessageResponse(**asdict(message)) for message in session.messages],
+    )
+
+
+@router.post("/{task_id}/requirements/confirm", response_model=TaskResponse)
+def confirm_requirements(task_id: str, req: RequirementConfirmRequest):
+    manager = get_manager()
+    try:
+        metadata = manager.confirm_requirements(task_id, req.summary)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return TaskResponse(**asdict(metadata))
 
 
 @router.post("/{task_id}/agents/run", response_model=list[AgentResultResponse])
