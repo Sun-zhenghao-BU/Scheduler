@@ -192,8 +192,56 @@ class WorkflowManager:
             lines.append(f"- {path.name}")
         return "\n".join(lines)
 
+    def write_execution_result(
+        self,
+        task_id: str,
+        summary: str,
+        selected_paths: list[str],
+        written: list[str],
+        test_command: str,
+        test_exit_code: int,
+        test_output: str,
+    ) -> None:
+        metadata, task_dir = self.get_task(task_id)
+        implementation_path = task_dir / "implementation.md"
+        review_path = task_dir / "review.md"
+        self._append_section(
+            implementation_path,
+            "Execution Summary",
+            "\n".join(
+                [
+                    summary.strip(),
+                    "",
+                    "Selected files:",
+                    *[f"- {path}" for path in selected_paths],
+                    "",
+                    "Applied files:",
+                    *([f"- {path}" for path in written] if written else ["- No files written"]),
+                ]
+            ).strip(),
+        )
+        self._append_section(
+            review_path,
+            "Execution Test Result",
+            "\n".join(
+                [
+                    f"Command: {test_command or '(none)'}",
+                    f"Exit code: {test_exit_code}",
+                    "",
+                    test_output.strip() or "(no output)",
+                ]
+            ),
+        )
+        metadata.updated_at = utc_timestamp()
+        self._write_metadata(task_dir, metadata)
+
     def _task_files(self, task_dir: Path) -> Iterable[Path]:
         return sorted(path for path in task_dir.iterdir() if path.is_file())
+
+    def _append_section(self, path: Path, heading: str, body: str) -> None:
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        section = f"\n## {heading}\n\n{body.strip()}\n"
+        path.write_text(existing.rstrip() + section + "\n", encoding="utf-8")
 
     def _read_metadata(self, metadata_file: Path) -> TaskMetadata:
         data = json.loads(metadata_file.read_text(encoding="utf-8"))

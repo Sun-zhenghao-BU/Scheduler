@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -14,10 +12,9 @@ from scheduler_automation.development import (
     DevelopmentCommandError,
     FileChange,
     apply_changes,
-    build_change,
+    propose_changes,
     run_test_command,
 )
-from scheduler_automation.llm.client import LLMClient, get_llm_config
 from scheduler_automation.project_workspace import load_workspace
 from scheduler_automation.workspace import Workspace, WorkspaceAccessError
 
@@ -156,8 +153,7 @@ async def _create_proposal(
     except WorkspaceAccessError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    raw = await _ask_llm(instruction, selected_files)
-    summary, changes = _parse_llm_changes(workspace, raw)
+    summary, changes = await propose_changes(workspace, instruction, [str(item["path"]) for item in selected_files])
     session_id = uuid.uuid4().hex
     payload = {
         "session_id": session_id,
@@ -175,49 +171,3 @@ async def _create_proposal(
         changes=[FileChangeResponse(**change.to_dict()) for change in changes],
     )
 
-
-async def _ask_llm(instruction: str, selected_files: list[dict[str, str | int]]) -> str:
-    config = get_llm_config()
-    if not config["api_key"]:
-        raise HTTPException(status_code=400, detail="Configure an LLM API key before proposing changes.")
-
-    files_text = "\n\n".join(
-        f"## {item['path']}\n\n```text\n{item['content']}\n```"
-        for item in selected_files
-    )
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a code editing agent. Return JSON only, without Markdown. "
-                'Format: {"summary":"...","files":[{"path":"relative/path","content":"full file contents"}]}.'
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"Instruction: {instruction}\n\nCurrent files:\n\n{files_text}",
-        },
-    ]
-    return await LLMClient(config).chat(messages)
-
-
-def _parse_llm_changes(workspace: Workspace, raw: str) -> tuple[str, list[FileChange]]:
-    text = _extract_json(raw)
-    data: dict[str, Any] = json.loads(text)
-    summary = str(data.get("summary", "Generated code changes."))
-    changes: list[FileChange] = []
-    for item in data.get("files", []):
-        path = str(item["path"])
-        content = str(item["content"])
-        changes.append(build_change(workspace, path, content))
-    if not changes:
-        raise HTTPException(status_code=400, detail="The model did not return any file changes.")
-    return summary, changes
-
-
-def _extract_json(raw: str) -> str:
-    text = raw.strip()
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
-    if fenced:
-        return fenced.group(1).strip()
-    return text

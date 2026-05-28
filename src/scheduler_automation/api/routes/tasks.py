@@ -7,6 +7,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from scheduler_automation.agents import LLMRoleProvider, load_agent_results, run_agent_workflow
+from scheduler_automation.development import propose_changes, run_test_command
+from scheduler_automation.execution import ExecutionRequest, execute_task
+from scheduler_automation.project_workspace import load_workspace
 from scheduler_automation.workflow import STAGES, WorkflowManager
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -81,6 +84,23 @@ class RequirementSessionResponse(BaseModel):
     status: str
     summary: str
     messages: list[RequirementMessageResponse]
+
+
+class ExecuteTaskRequest(BaseModel):
+    instruction: str = ""
+    paths: list[str] = []
+    test_command: str = ""
+    apply_changes: bool = True
+
+
+class ExecuteTaskResponse(BaseModel):
+    summary: str
+    selected_paths: list[str]
+    written: list[str]
+    test_command: str
+    test_exit_code: int
+    test_output: str
+    stage: str
 
 
 @router.get("/", response_model=list[TaskResponse])
@@ -228,3 +248,48 @@ def update_task_file(task_id: str, file_name: str, body: dict[str, str]):
     file_path = task_dir / safe_name
     file_path.write_text(body.get("content", ""), encoding="utf-8")
     return {"status": "ok"}
+
+
+@router.post("/{task_id}/execute", response_model=ExecuteTaskResponse)
+async def execute_task_implementation(task_id: str, req: ExecuteTaskRequest):
+    manager = get_manager()
+
+    async def _proposal(instruction: str, paths: list[str], project_id: str):
+        workspace = load_workspace(Path.cwd(), project_id)
+        if workspace is None or not workspace.exists():
+            raise ValueError("Project workspace is not configured or does not exist.")
+        return await propose_changes(workspace, instruction, paths)
+
+    def _test_runner(project_id: str, command: str):
+        workspace = load_workspace(Path.cwd(), project_id)
+        if workspace is None or not workspace.exists():
+            raise ValueError("Project workspace is not configured or does not exist.")
+        return run_test_command(workspace, command)
+
+    try:
+        result = await execute_task(
+            manager,
+            task_id,
+            ExecutionRequest(
+                instruction=req.instruction,
+                paths=req.paths,
+                test_command=req.test_command,
+                apply_changes=req.apply_changes,
+            ),
+            _proposal,
+            _test_runner,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return ExecuteTaskResponse(
+        summary=result.summary,
+        selected_paths=result.selected_paths,
+        written=result.written,
+        test_command=result.test_command,
+        test_exit_code=result.test_exit_code,
+        test_output=result.test_output,
+        stage=result.stage,
+    )

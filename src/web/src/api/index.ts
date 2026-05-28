@@ -9,6 +9,7 @@ import type {
   RequirementSession,
   Task,
   TaskDetail,
+  TaskExecutionResult,
   TestCommandResult,
   WorkspaceFile,
   WorkspaceInfo,
@@ -118,6 +119,14 @@ export async function addRequirementMessage(
 
 export async function confirmRequirements(taskId: string, summary: string): Promise<Task> {
   const { data } = await api.post<Task>(`/tasks/${taskId}/requirements/confirm`, { summary });
+  return data;
+}
+
+export async function executeTask(
+  taskId: string,
+  payload: { instruction?: string; paths?: string[]; test_command?: string; apply_changes?: boolean } = {},
+): Promise<TaskExecutionResult> {
+  const { data } = await api.post<TaskExecutionResult>(`/tasks/${taskId}/execute`, payload);
   return data;
 }
 

@@ -77,6 +77,16 @@ export interface TestCommandResult {
   output: string;
 }
 
+export interface TaskExecutionResult {
+  summary: string;
+  selected_paths: string[];
+  written: string[];
+  test_command: string;
+  test_exit_code: number;
+  test_output: string;
+  stage: string;
+}
+
 export type AgentRole = 'product_manager' | 'developer' | 'tester';
 export type AgentStatus = 'completed' | 'failed';
 
@@ -100,21 +110,21 @@ export interface RequirementSession {
 }
 
 export const AGENT_LABELS: Record<AgentRole, string> = {
-  product_manager: '产品经理',
-  developer: '开发代理',
-  tester: '测试代理',
+  product_manager: 'Product Manager',
+  developer: 'Developer',
+  tester: 'Tester',
 };
 
 export const STAGES = ['intake', 'spec', 'implement', 'review', 'fix', 'release'] as const;
 export type Stage = (typeof STAGES)[number];
 
 export const STAGE_LABELS: Record<Stage, string> = {
-  intake: '需求录入',
-  spec: '方案规划',
-  implement: '实施方案',
-  review: '测试评审',
-  fix: '问题修复',
-  release: '发布上线',
+  intake: 'Intake',
+  spec: 'Spec',
+  implement: 'Implement',
+  review: 'Review',
+  fix: 'Fix',
+  release: 'Release',
 };
 
 export const STAGE_COLORS: Record<Stage, string> = {

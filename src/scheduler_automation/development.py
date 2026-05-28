@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import difflib
+import json
+import re
 import shlex
 import subprocess
 from dataclasses import asdict, dataclass
 
+from scheduler_automation.llm.client import LLMClient, get_llm_config
 from scheduler_automation.workspace import Workspace
 
 BLOCKED_COMMAND_TOKENS = {"&&", "||", ";", "|", ">", "<", "`", "$(", "&"}
@@ -36,8 +39,11 @@ class FileChange:
 
 
 def build_change(workspace: Workspace, path: str, new_content: str) -> FileChange:
-    current = workspace.read_file(path)
-    old_content = str(current["content"])
+    try:
+        current = workspace.read_file(path)
+        old_content = str(current["content"])
+    except Exception:
+        old_content = ""
     diff = "".join(
         difflib.unified_diff(
             old_content.splitlines(keepends=True),
@@ -100,3 +106,70 @@ def run_test_command(workspace: Workspace, command: str, timeout_seconds: int = 
     )
     output = (completed.stdout or "") + (completed.stderr or "")
     return TestRunResult(command=command, exit_code=completed.returncode, output=output)
+
+
+def infer_test_command(workspace: Workspace) -> str:
+    root = workspace.root
+    if (root / "package.json").exists():
+        return "npm test"
+    if (root / "pyproject.toml").exists() or (root / "tests").exists():
+        return "python -m pytest"
+    return ""
+
+
+async def propose_changes(workspace: Workspace, instruction: str, paths: list[str]) -> tuple[str, list[FileChange]]:
+    if not paths:
+        raise DevelopmentCommandError("Select at least one file to modify.")
+
+    selected_files: list[dict[str, str | int]] = []
+    for path in paths:
+        selected_files.append(workspace.read_file(path))
+
+    config = get_llm_config()
+    if not config["api_key"]:
+        raise DevelopmentCommandError("Configure an LLM API key before generating code changes.")
+
+    files_text = "\n\n".join(
+        f"## {item['path']}\n\n```text\n{item['content']}\n```"
+        for item in selected_files
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a code editing agent. Return JSON only, without Markdown. "
+                'Format: {"summary":"...","files":[{"path":"relative/path","content":"full file contents"}]}.'
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Instruction: {instruction}\n\nCurrent files:\n\n{files_text}",
+        },
+    ]
+    raw = await LLMClient(config).chat(messages)
+    return parse_proposed_changes(workspace, str(raw))
+
+
+def parse_proposed_changes(workspace: Workspace, raw: str) -> tuple[str, list[FileChange]]:
+    text = _extract_json(raw)
+    data: dict[str, object] = json.loads(text)
+    summary = str(data.get("summary", "Generated code changes."))
+    changes: list[FileChange] = []
+    for item in data.get("files", []):  # type: ignore[assignment]
+        file_data = item if isinstance(item, dict) else {}
+        path = str(file_data.get("path", ""))
+        content = str(file_data.get("content", ""))
+        if not path:
+            continue
+        changes.append(build_change(workspace, path, content))
+    if not changes:
+        raise DevelopmentCommandError("The model did not return any file changes.")
+    return summary, changes
+
+
+def _extract_json(raw: str) -> str:
+    text = raw.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+    if fenced:
+        return fenced.group(1).strip()
+    return text
