@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { Alert, Button, Checkbox, Empty, Input, List, message, Space, Tag } from 'antd';
 import { FileTextOutlined, FolderOutlined, ReloadOutlined } from '@ant-design/icons';
-import { applyDevelopment, getWorkspaceFile, getWorkspaceInfo, getWorkspaceTree, proposeDevelopment, runDevelopmentTest } from '../api';
-import type { DevelopmentProposal, TestCommandResult, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
+import {
+  applyDevelopment,
+  getWorkspaceFile,
+  getWorkspaceInfo,
+  getWorkspaceTree,
+  proposeDevelopment,
+  runDevelopmentTest,
+} from '../api';
+import type {
+  DevelopmentProposal,
+  TestCommandResult,
+  WorkspaceFile,
+  WorkspaceInfo,
+  WorkspaceItem,
+} from '../types';
 
 const { TextArea } = Input;
 
 function Workspace() {
+  const { projectId = '' } = useParams<{ projectId: string }>();
   const [info, setInfo] = useState<WorkspaceInfo | null>(null);
   const [items, setItems] = useState<WorkspaceItem[]>([]);
   const [selected, setSelected] = useState<WorkspaceFile | null>(null);
@@ -23,12 +38,13 @@ function Workspace() {
   const loadWorkspace = useCallback(async () => {
     setLoading(true);
     try {
-      const workspaceInfo = await getWorkspaceInfo();
+      const workspaceInfo = await getWorkspaceInfo(projectId);
       setInfo(workspaceInfo);
       setSelected(null);
       setProposal(null);
+      setCheckedPaths([]);
       if (workspaceInfo.configured) {
-        setItems(await getWorkspaceTree());
+        setItems(await getWorkspaceTree(projectId));
       } else {
         setItems([]);
       }
@@ -37,38 +53,18 @@ function Workspace() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
-    let active = true;
-    getWorkspaceInfo()
-      .then(async (workspaceInfo) => {
-        if (!active) return;
-        setInfo(workspaceInfo);
-        if (workspaceInfo.configured) {
-          const tree = await getWorkspaceTree();
-          if (active) setItems(tree);
-        } else {
-          setItems([]);
-        }
-      })
-      .catch(() => {
-        message.error('项目工作区加载失败');
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+    void loadWorkspace();
+  }, [loadWorkspace]);
 
-  const files = useMemo(() => items.filter(item => item.type === 'file'), [items]);
+  const files = useMemo(() => items.filter((item) => item.type === 'file'), [items]);
 
   const openFile = async (item: WorkspaceItem) => {
     if (item.type !== 'file') return;
     try {
-      setSelected(await getWorkspaceFile(item.path));
+      setSelected(await getWorkspaceFile(item.path, projectId));
     } catch (err: unknown) {
       const error = err as Error;
       message.error(`文件读取失败：${error.message}`);
@@ -76,9 +72,9 @@ function Workspace() {
   };
 
   const togglePath = (path: string, checked: boolean) => {
-    setCheckedPaths((current) => (
-      checked ? [...new Set([...current, path])] : current.filter(item => item !== path)
-    ));
+    setCheckedPaths((current) =>
+      checked ? [...new Set([...current, path])] : current.filter((item) => item !== path),
+    );
   };
 
   const handlePropose = async () => {
@@ -92,7 +88,7 @@ function Workspace() {
     }
     setDeveloping(true);
     try {
-      setProposal(await proposeDevelopment(instruction.trim(), checkedPaths));
+      setProposal(await proposeDevelopment(instruction.trim(), checkedPaths, projectId));
       message.success('修改方案已生成');
     } catch (err: unknown) {
       const error = err as Error;
@@ -110,7 +106,7 @@ function Workspace() {
       message.success(`已写回 ${result.written.length} 个文件`);
       setProposal(null);
       if (selected && result.written.includes(selected.path)) {
-        setSelected(await getWorkspaceFile(selected.path));
+        setSelected(await getWorkspaceFile(selected.path, projectId));
       }
     } catch (err: unknown) {
       const error = err as Error;
@@ -127,7 +123,7 @@ function Workspace() {
     }
     setTesting(true);
     try {
-      const result = await runDevelopmentTest(testCommand.trim());
+      const result = await runDevelopmentTest(testCommand.trim(), projectId);
       setTestResult(result);
       if (result.exit_code === 0) {
         message.success('测试命令执行成功');
@@ -148,7 +144,7 @@ function Workspace() {
         <div className="section-heading">
           <div>
             <h3>项目工作区</h3>
-            <p>只读浏览挂载到容器中的本地项目，代理会把文件树作为开发上下文。</p>
+            <p>浏览当前项目绑定的代码目录，选择文件后生成修改方案或运行测试。</p>
           </div>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={loadWorkspace}>
             刷新
@@ -159,15 +155,15 @@ function Workspace() {
           <Alert
             type="warning"
             showIcon
-            message="项目目录未配置"
-            description="请通过 PROJECT_ROOT 环境变量把本地项目挂载到容器的 /workspace/project。"
+            message="当前项目还没有绑定目录"
+            description="先在项目入口为该项目设置 root_path，然后再回到这里浏览、修改和测试代码。"
             style={{ marginBottom: 16 }}
           />
         )}
 
         {info?.configured && (
           <Space style={{ marginBottom: 12 }}>
-            <Tag color="green">已挂载</Tag>
+            <Tag color="green">已绑定</Tag>
             <code>{info.root}</code>
           </Space>
         )}
@@ -177,7 +173,7 @@ function Workspace() {
             value={instruction}
             onChange={(event) => setInstruction(event.target.value)}
             rows={4}
-            placeholder="输入你希望修改的功能或问题，例如：把登录按钮改成加载态，并补充错误提示"
+            placeholder="输入你希望修改的功能或问题，例如：给登录按钮加 loading 状态，并补充错误提示。"
           />
           <Space style={{ marginTop: 10 }}>
             <Button type="primary" loading={developing} onClick={handlePropose}>

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import uuid
@@ -19,6 +18,7 @@ from scheduler_automation.development import (
     run_test_command,
 )
 from scheduler_automation.llm.client import LLMClient, get_llm_config
+from scheduler_automation.project_workspace import load_workspace
 from scheduler_automation.workspace import Workspace, WorkspaceAccessError
 
 router = APIRouter(prefix="/api/development", tags=["development"])
@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/development", tags=["development"])
 class DevelopRequest(BaseModel):
     instruction: str
     paths: list[str] = []
+    project_id: str = ""
 
 
 class TestFixRequest(BaseModel):
@@ -34,6 +35,7 @@ class TestFixRequest(BaseModel):
     paths: list[str] = []
     test_command: str
     test_output: str
+    project_id: str = ""
 
 
 class FileChangeResponse(BaseModel):
@@ -59,6 +61,7 @@ class ApplyResponse(BaseModel):
 
 class TestCommandRequest(BaseModel):
     command: str
+    project_id: str = ""
 
 
 class TestCommandResponse(BaseModel):
@@ -67,8 +70,18 @@ class TestCommandResponse(BaseModel):
     output: str
 
 
-def _workspace() -> Workspace:
-    return Workspace(Path(os.environ.get("SCHEDULER_PROJECT_ROOT", "/workspace/project")))
+def _workspace(project_id: str = "") -> Workspace | None:
+    return load_workspace(Path.cwd(), project_id)
+
+
+def _require_workspace(project_id: str = "") -> Workspace:
+    try:
+        workspace = _workspace(project_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    if workspace is None or not workspace.exists():
+        raise HTTPException(status_code=404, detail="Project workspace is not configured or does not exist.")
+    return workspace
 
 
 def _sessions_dir() -> Path:
@@ -79,38 +92,35 @@ def _sessions_dir() -> Path:
 
 @router.post("/propose", response_model=DevelopProposalResponse)
 async def propose_development(req: DevelopRequest):
-    workspace = _workspace()
-    if not workspace.exists():
-        raise HTTPException(status_code=404, detail="项目目录未配置或不存在")
     if not req.instruction.strip():
-        raise HTTPException(status_code=400, detail="请输入修改需求")
-    return await _create_proposal(workspace, req.instruction.strip(), req.paths)
+        raise HTTPException(status_code=400, detail="Instruction is required.")
+    workspace = _require_workspace(req.project_id)
+    return await _create_proposal(workspace, req.instruction.strip(), req.paths, req.project_id)
 
 
 @router.post("/fix", response_model=DevelopProposalResponse)
 async def propose_test_fix(req: TestFixRequest):
-    workspace = _workspace()
-    if not workspace.exists():
-        raise HTTPException(status_code=404, detail="项目目录未配置或不存在")
     if not req.test_output.strip():
-        raise HTTPException(status_code=400, detail="缺少测试失败输出")
+        raise HTTPException(status_code=400, detail="Test output is required.")
+    workspace = _require_workspace(req.project_id)
     instruction = (
-        f"原始需求：{req.instruction.strip() or '根据测试失败修复问题'}\n\n"
-        f"测试命令：{req.test_command}\n\n"
-        f"测试失败输出：\n{req.test_output}"
+        f"Original instruction: {req.instruction.strip() or 'Fix the failure described in the test output.'}\n\n"
+        f"Test command: {req.test_command}\n\n"
+        f"Failing test output:\n{req.test_output}"
     )
-    return await _create_proposal(workspace, instruction, req.paths)
+    return await _create_proposal(workspace, instruction, req.paths, req.project_id)
 
 
 @router.post("/apply", response_model=ApplyResponse)
 def apply_development(req: ApplyRequest):
     session_path = _sessions_dir() / f"{req.session_id}.json"
     if not session_path.exists():
-        raise HTTPException(status_code=404, detail="修改会话不存在")
+        raise HTTPException(status_code=404, detail="Development session not found.")
     data = json.loads(session_path.read_text(encoding="utf-8"))
     changes = [FileChange.from_dict(item) for item in data.get("changes", [])]
+    workspace = _require_workspace(str(data.get("project_id", "")))
     try:
-        written = apply_changes(_workspace(), changes)
+        written = apply_changes(workspace, changes)
     except WorkspaceAccessError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return ApplyResponse(written=written)
@@ -118,23 +128,26 @@ def apply_development(req: ApplyRequest):
 
 @router.post("/test", response_model=TestCommandResponse)
 def run_development_test(req: TestCommandRequest):
-    workspace = _workspace()
-    if not workspace.exists():
-        raise HTTPException(status_code=404, detail="项目目录未配置或不存在")
+    workspace = _require_workspace(req.project_id)
     try:
         result = run_test_command(workspace, req.command)
     except DevelopmentCommandError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except FileNotFoundError:
-        raise HTTPException(status_code=400, detail="测试命令不存在，请确认项目环境已安装")
+        raise HTTPException(status_code=400, detail="Test command was not found in the project environment.")
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="测试命令执行超时")
+        raise HTTPException(status_code=408, detail="Test command timed out.")
     return TestCommandResponse(command=result.command, exit_code=result.exit_code, output=result.output)
 
 
-async def _create_proposal(workspace: Workspace, instruction: str, paths: list[str]) -> DevelopProposalResponse:
+async def _create_proposal(
+    workspace: Workspace,
+    instruction: str,
+    paths: list[str],
+    project_id: str = "",
+) -> DevelopProposalResponse:
     if not paths:
-        raise HTTPException(status_code=400, detail="请至少选择一个要修改的文件")
+        raise HTTPException(status_code=400, detail="Select at least one file to modify.")
 
     selected_files: list[dict[str, str | int]] = []
     try:
@@ -149,6 +162,7 @@ async def _create_proposal(workspace: Workspace, instruction: str, paths: list[s
     payload = {
         "session_id": session_id,
         "summary": summary,
+        "project_id": project_id,
         "changes": [change.to_dict() for change in changes],
     }
     (_sessions_dir() / f"{session_id}.json").write_text(
@@ -165,7 +179,7 @@ async def _create_proposal(workspace: Workspace, instruction: str, paths: list[s
 async def _ask_llm(instruction: str, selected_files: list[dict[str, str | int]]) -> str:
     config = get_llm_config()
     if not config["api_key"]:
-        raise HTTPException(status_code=400, detail="请先在系统设置中配置模型 API")
+        raise HTTPException(status_code=400, detail="Configure an LLM API key before proposing changes.")
 
     files_text = "\n\n".join(
         f"## {item['path']}\n\n```text\n{item['content']}\n```"
@@ -175,15 +189,13 @@ async def _ask_llm(instruction: str, selected_files: list[dict[str, str | int]])
         {
             "role": "system",
             "content": (
-                "你是代码修改代理。你只能基于用户提供的文件内容生成修改。"
-                "必须只返回 JSON，不要返回 Markdown。JSON 格式："
-                '{"summary":"修改摘要","files":[{"path":"相对路径","content":"完整的新文件内容"}]}。'
-                "content 必须是完整文件内容，不是片段。"
+                "You are a code editing agent. Return JSON only, without Markdown. "
+                'Format: {"summary":"...","files":[{"path":"relative/path","content":"full file contents"}]}.'
             ),
         },
         {
             "role": "user",
-            "content": f"修改需求：{instruction}\n\n当前文件：\n\n{files_text}",
+            "content": f"Instruction: {instruction}\n\nCurrent files:\n\n{files_text}",
         },
     ]
     return await LLMClient(config).chat(messages)
@@ -192,14 +204,14 @@ async def _ask_llm(instruction: str, selected_files: list[dict[str, str | int]])
 def _parse_llm_changes(workspace: Workspace, raw: str) -> tuple[str, list[FileChange]]:
     text = _extract_json(raw)
     data: dict[str, Any] = json.loads(text)
-    summary = str(data.get("summary", "已生成修改方案"))
+    summary = str(data.get("summary", "Generated code changes."))
     changes: list[FileChange] = []
     for item in data.get("files", []):
         path = str(item["path"])
         content = str(item["content"])
         changes.append(build_change(workspace, path, content))
     if not changes:
-        raise HTTPException(status_code=400, detail="模型没有返回可应用的文件修改")
+        raise HTTPException(status_code=400, detail="The model did not return any file changes.")
     return summary, changes
 
 

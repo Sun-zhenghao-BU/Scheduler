@@ -99,23 +99,36 @@ export async function validateLLMConfig(): Promise<{ valid: boolean; message: st
   return data;
 }
 
-export async function getWorkspaceInfo(): Promise<WorkspaceInfo> {
-  const { data } = await api.get<WorkspaceInfo>('/workspace/');
+export async function getWorkspaceInfo(projectId = ''): Promise<WorkspaceInfo> {
+  const { data } = await api.get<WorkspaceInfo>('/workspace/', {
+    params: projectId ? { project_id: projectId } : undefined,
+  });
   return data;
 }
 
-export async function getWorkspaceTree(): Promise<WorkspaceItem[]> {
-  const { data } = await api.get<WorkspaceItem[]>('/workspace/tree');
+export async function getWorkspaceTree(projectId = ''): Promise<WorkspaceItem[]> {
+  const { data } = await api.get<WorkspaceItem[]>('/workspace/tree', {
+    params: projectId ? { project_id: projectId } : undefined,
+  });
   return data;
 }
 
-export async function getWorkspaceFile(path: string): Promise<WorkspaceFile> {
-  const { data } = await api.get<WorkspaceFile>('/workspace/file', { params: { path } });
+export async function getWorkspaceFile(path: string, projectId = ''): Promise<WorkspaceFile> {
+  const params = projectId ? { path, project_id: projectId } : { path };
+  const { data } = await api.get<WorkspaceFile>('/workspace/file', { params });
   return data;
 }
 
-export async function proposeDevelopment(instruction: string, paths: string[]): Promise<DevelopmentProposal> {
-  const { data } = await api.post<DevelopmentProposal>('/development/propose', { instruction, paths });
+export async function proposeDevelopment(
+  instruction: string,
+  paths: string[],
+  projectId = '',
+): Promise<DevelopmentProposal> {
+  const { data } = await api.post<DevelopmentProposal>('/development/propose', {
+    instruction,
+    paths,
+    project_id: projectId,
+  });
   return data;
 }
 
@@ -124,7 +137,10 @@ export async function applyDevelopment(sessionId: string): Promise<{ written: st
   return data;
 }
 
-export async function runDevelopmentTest(command: string): Promise<TestCommandResult> {
-  const { data } = await api.post<TestCommandResult>('/development/test', { command });
+export async function runDevelopmentTest(command: string, projectId = ''): Promise<TestCommandResult> {
+  const { data } = await api.post<TestCommandResult>('/development/test', {
+    command,
+    project_id: projectId,
+  });
   return data;
 }

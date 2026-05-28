@@ -68,21 +68,23 @@ class TestRunResult:
 
 def validate_test_command(command: str) -> list[str]:
     if not command.strip():
-        raise DevelopmentCommandError("请输入测试命令")
+        raise DevelopmentCommandError("Test command is required.")
     if any(token in command for token in BLOCKED_COMMAND_TOKENS):
-        raise DevelopmentCommandError("测试命令不能包含 shell 控制符")
+        raise DevelopmentCommandError("Shell control operators are not allowed in test commands.")
     try:
         args = shlex.split(command, posix=False)
     except ValueError as exc:
         raise DevelopmentCommandError(str(exc))
     if not args:
-        raise DevelopmentCommandError("请输入测试命令")
+        raise DevelopmentCommandError("Test command is required.")
 
     executable = args[0]
     if executable not in ALLOWED_TEST_EXECUTABLES:
-        raise DevelopmentCommandError("只允许运行 npm、pnpm、yarn、pytest、python -m pytest 等测试命令")
+        raise DevelopmentCommandError(
+            "Only npm, pnpm, yarn, pytest, or python -m pytest are allowed test commands."
+        )
     if executable in {"python", "python3"} and args[1:3] != ["-m", "pytest"]:
-        raise DevelopmentCommandError("python 命令只允许使用 python -m pytest")
+        raise DevelopmentCommandError("Python commands must use 'python -m pytest'.")
     return args
 
 

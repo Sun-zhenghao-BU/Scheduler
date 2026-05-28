@@ -70,11 +70,11 @@ class Workspace:
     def read_file(self, relative_path: str) -> dict[str, str | int]:
         path = self._resolve(relative_path)
         if not path.exists() or not path.is_file():
-            raise WorkspaceAccessError("文件不存在")
+            raise WorkspaceAccessError("File does not exist.")
         if path.stat().st_size > MAX_FILE_BYTES:
-            raise WorkspaceAccessError("文件过大，暂不支持读取")
+            raise WorkspaceAccessError("File is too large to preview.")
         if path.suffix and path.suffix.lower() not in TEXT_EXTENSIONS:
-            raise WorkspaceAccessError("仅支持读取文本文件")
+            raise WorkspaceAccessError("Only text files can be previewed.")
         return {
             "path": path.relative_to(self.root).as_posix(),
             "content": path.read_text(encoding="utf-8", errors="replace"),
@@ -85,18 +85,18 @@ class Workspace:
         return self._resolve(relative_path)
 
     def summary(self, limit: int = 200) -> str:
-        lines = [f"项目根目录：{self.root}"]
+        lines = [f"Workspace root: {self.root}"]
         for item in self.tree(limit=limit):
-            prefix = "目录" if item["type"] == "directory" else "文件"
+            prefix = "dir" if item["type"] == "directory" else "file"
             lines.append(f"- [{prefix}] {item['path']}")
         return "\n".join(lines)
 
     def _resolve(self, relative_path: str) -> Path:
         path = (self.root / relative_path).resolve()
         if path != self.root and self.root not in path.parents:
-            raise WorkspaceAccessError("不能访问项目目录之外的文件")
+            raise WorkspaceAccessError("Cannot access files outside the workspace.")
         if self._is_ignored(path):
-            raise WorkspaceAccessError("该路径被忽略")
+            raise WorkspaceAccessError("This path is ignored.")
         return path
 
     def _is_ignored(self, path: Path) -> bool:
