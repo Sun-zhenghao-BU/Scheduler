@@ -350,7 +350,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>需求确认</h3>
-            <p>先把需求摘要锁定，后续产品方案、开发和测试都会以这份确认内容为准。</p>
+            <p>先把需求摘要锁定，后续产品规划、实施方案和测试评审都会以这份确认内容为准。</p>
           </div>
           <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
@@ -413,7 +413,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>自动流程</h3>
-            <p>点击后会串行执行：产品经理方案细化、开发实施、测试评审，并根据结果进入修复或发布阶段。</p>
+            <p>点击后会按顺序执行：生成产品规划、生成实施方案、实际改代码、测试评审，再决定进入修复还是发布。</p>
           </div>
           <Button
             type="primary"
@@ -430,18 +430,22 @@ function TaskDetail() {
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="请先确认需求摘要，确认后才能执行产品经理、开发、测试的串行流程。"
+            message="请先确认需求摘要，确认后才能执行完整的产品、开发、测试串行流程。"
           />
         )}
         {workflowResult && (
           <Card size="small" title="最近一次流程结果">
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
               <div>
-                <strong>产品经理输出</strong>
+                <strong>产品规划输出（spec.md）</strong>
                 <pre>{workflowResult.product_error || workflowResult.product_content || '无'}</pre>
               </div>
               <div>
-                <strong>开发结果摘要</strong>
+                <strong>实施方案输出（implementation.md）</strong>
+                <pre>{workflowResult.developer_error || workflowResult.developer_content || '无'}</pre>
+              </div>
+              <div>
+                <strong>实际实施结果摘要</strong>
                 <pre>{workflowResult.implementation_summary}</pre>
               </div>
               <div>
@@ -461,7 +465,7 @@ function TaskDetail() {
                 <pre>{workflowResult.test_output || '无输出'}</pre>
               </div>
               <div>
-                <strong>测试代理结论</strong>
+                <strong>测试评审输出（review.md）</strong>
                 <pre>{workflowResult.tester_error || workflowResult.tester_content || '无'}</pre>
               </div>
               <div>
@@ -481,7 +485,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>辅助代理分析</h3>
-            <p>这部分仍然保留给手动参考使用，不参与自动串行流程。</p>
+            <p>这部分保留给手动参考使用，不参与自动串行流程。</p>
           </div>
           <Button type="default" icon={<TeamOutlined />} loading={agentsLoading} onClick={handleRunAgents}>
             运行辅助代理

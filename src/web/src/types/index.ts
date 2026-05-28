@@ -91,6 +91,9 @@ export interface TaskOrchestrationResult {
   product_status: string;
   product_content: string;
   product_error: string;
+  developer_status: string;
+  developer_content: string;
+  developer_error: string;
   implementation_summary: string;
   written: string[];
   test_command: string;

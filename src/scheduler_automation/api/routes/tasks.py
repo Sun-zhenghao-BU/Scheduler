@@ -108,6 +108,9 @@ class OrchestrateTaskResponse(BaseModel):
     product_status: str
     product_content: str
     product_error: str = ""
+    developer_status: str
+    developer_content: str
+    developer_error: str = ""
     implementation_summary: str
     written: list[str]
     test_command: str
@@ -351,6 +354,9 @@ async def orchestrate_task(task_id: str, req: ExecuteTaskRequest):
         product_status=result.product_result.status,
         product_content=result.product_result.content,
         product_error=result.product_result.error,
+        developer_status=result.developer_result.status,
+        developer_content=result.developer_result.content,
+        developer_error=result.developer_result.error,
         implementation_summary=result.execution_result.summary,
         written=result.execution_result.written,
         test_command=result.execution_result.test_command,
