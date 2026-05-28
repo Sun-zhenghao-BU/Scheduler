@@ -12,15 +12,15 @@ services:
       - "80:80"
     environment:
       SCHEDULER_PROJECT_ROOT: /workspace/project
-      SCHEDULER_HOST_WORK_LABEL: ${HOST_WORK_PATH:-D:/Work}
-      SCHEDULER_HOST_HOME_LABEL: ${HOST_HOME_PATH:-C:/Users/SZH}
-      SCHEDULER_OPEN_ROOTS: project|当前项目|/workspace/project;work|${HOST_WORK_PATH:-D:/Work}|/host/work;home|${HOST_HOME_PATH:-C:/Users/SZH}|/host/home
+      SCHEDULER_HOST_C_LABEL: ${HOST_C_LABEL:-Windows (C:)}
+      SCHEDULER_HOST_D_LABEL: ${HOST_D_LABEL:-新加卷 (D:)}
+      SCHEDULER_OPEN_ROOTS: project|当前项目|/workspace/project;c|${HOST_C_LABEL:-Windows (C:)}|/host/c;d|${HOST_D_LABEL:-新加卷 (D:)}|/host/d
     volumes:
       - scheduler-data:/root/.scheduler
       - ./tasks:/app/tasks
       - ${PROJECT_ROOT:-.}:/workspace/project
-      - ${HOST_WORK_PATH:-D:/Work}:/host/work
-      - ${HOST_HOME_PATH:-C:/Users/SZH}:/host/home
+      - ${HOST_C_PATH:-C:/}:/host/c
+      - ${HOST_D_PATH:-D:/}:/host/d
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/healthz', timeout=5).read()"]
       interval: 30s

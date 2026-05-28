@@ -34,8 +34,8 @@ def configured_open_roots() -> list[OpenRoot]:
 
     defaults = [
         OpenRoot(root_id="project", label="Current Project", path=os.environ.get("SCHEDULER_PROJECT_ROOT", "/workspace/project")),
-        OpenRoot(root_id="work", label=os.environ.get("SCHEDULER_HOST_WORK_LABEL", "Work"), path="/host/work"),
-        OpenRoot(root_id="home", label=os.environ.get("SCHEDULER_HOST_HOME_LABEL", "Home"), path="/host/home"),
+        OpenRoot(root_id="c", label=os.environ.get("SCHEDULER_HOST_C_LABEL", "Windows (C:)"), path="/host/c"),
+        OpenRoot(root_id="d", label=os.environ.get("SCHEDULER_HOST_D_LABEL", "Data (D:)"), path="/host/d"),
     ]
     return [root for root in defaults if Path(root.path).exists()]
 
