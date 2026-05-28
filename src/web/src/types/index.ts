@@ -110,21 +110,21 @@ export interface RequirementSession {
 }
 
 export const AGENT_LABELS: Record<AgentRole, string> = {
-  product_manager: 'Product Manager',
-  developer: 'Developer',
-  tester: 'Tester',
+  product_manager: '产品经理',
+  developer: '开发代理',
+  tester: '测试代理',
 };
 
 export const STAGES = ['intake', 'spec', 'implement', 'review', 'fix', 'release'] as const;
 export type Stage = (typeof STAGES)[number];
 
 export const STAGE_LABELS: Record<Stage, string> = {
-  intake: 'Intake',
-  spec: 'Spec',
-  implement: 'Implement',
-  review: 'Review',
-  fix: 'Fix',
-  release: 'Release',
+  intake: '需求录入',
+  spec: '方案规划',
+  implement: '实施开发',
+  review: '测试评审',
+  fix: '问题修复',
+  release: '发布上线',
 };
 
 export const STAGE_COLORS: Record<Stage, string> = {

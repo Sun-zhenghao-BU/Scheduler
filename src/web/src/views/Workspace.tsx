@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Checkbox, Empty, Input, List, message, Space, Tag } from 'antd';
+import { Alert, Button, Checkbox, Empty, Input, List, Space, Tag, message } from 'antd';
 import { FileTextOutlined, FolderOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   applyDevelopment,
@@ -17,6 +17,7 @@ import type {
   WorkspaceInfo,
   WorkspaceItem,
 } from '../types';
+import { getErrorMessage } from '../utils/error';
 
 const { TextArea } = Input;
 
@@ -48,8 +49,8 @@ function Workspace() {
       } else {
         setItems([]);
       }
-    } catch {
-      message.error('项目工作区加载失败');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '项目工作区加载失败'));
     } finally {
       setLoading(false);
     }
@@ -62,19 +63,18 @@ function Workspace() {
   const files = useMemo(() => items.filter((item) => item.type === 'file'), [items]);
 
   const openFile = async (item: WorkspaceItem) => {
-    if (item.type !== 'file') return;
+    if (item.type !== 'file') {
+      return;
+    }
     try {
       setSelected(await getWorkspaceFile(item.path, projectId));
-    } catch (err: unknown) {
-      const error = err as Error;
-      message.error(`文件读取失败：${error.message}`);
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '文件读取失败'));
     }
   };
 
   const togglePath = (path: string, checked: boolean) => {
-    setCheckedPaths((current) =>
-      checked ? [...new Set([...current, path])] : current.filter((item) => item !== path),
-    );
+    setCheckedPaths((current) => (checked ? [...new Set([...current, path])] : current.filter((item) => item !== path)));
   };
 
   const handlePropose = async () => {
@@ -90,16 +90,17 @@ function Workspace() {
     try {
       setProposal(await proposeDevelopment(instruction.trim(), checkedPaths, projectId));
       message.success('修改方案已生成');
-    } catch (err: unknown) {
-      const error = err as Error;
-      message.error(`修改方案生成失败：${error.message}`);
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '修改方案生成失败'));
     } finally {
       setDeveloping(false);
     }
   };
 
   const handleApply = async () => {
-    if (!proposal) return;
+    if (!proposal) {
+      return;
+    }
     setApplying(true);
     try {
       const result = await applyDevelopment(proposal.session_id);
@@ -108,9 +109,8 @@ function Workspace() {
       if (selected && result.written.includes(selected.path)) {
         setSelected(await getWorkspaceFile(selected.path, projectId));
       }
-    } catch (err: unknown) {
-      const error = err as Error;
-      message.error(`应用修改失败：${error.message}`);
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '应用修改失败'));
     } finally {
       setApplying(false);
     }
@@ -130,9 +130,8 @@ function Workspace() {
       } else {
         message.warning(`测试命令退出码：${result.exit_code}`);
       }
-    } catch (err: unknown) {
-      const error = err as Error;
-      message.error(`测试命令执行失败：${error.message}`);
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '测试命令执行失败'));
     } finally {
       setTesting(false);
     }
@@ -156,7 +155,7 @@ function Workspace() {
             type="warning"
             showIcon
             message="当前项目还没有绑定目录"
-            description="先在项目入口为该项目设置 root_path，然后再回到这里浏览、修改和测试代码。"
+            description="先在项目首页为该项目设置 root_path，然后再回到这里浏览、修改和测试代码。"
             style={{ marginBottom: 16 }}
           />
         )}
@@ -173,13 +172,13 @@ function Workspace() {
             value={instruction}
             onChange={(event) => setInstruction(event.target.value)}
             rows={4}
-            placeholder="输入你希望修改的功能或问题，例如：给登录按钮加 loading 状态，并补充错误提示。"
+            placeholder="输入你希望修改的功能或问题，例如：给登录按钮增加 loading 状态，并补充错误提示。"
           />
           <Space style={{ marginTop: 10 }}>
             <Button type="primary" loading={developing} onClick={handlePropose}>
               生成修改方案
             </Button>
-            <Tag>{checkedPaths.length} 个文件已选择</Tag>
+            <Tag>{checkedPaths.length} 个文件已选中</Tag>
           </Space>
         </div>
 

@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Table, Button, Tag, Space, Modal, Form, Input, message } from 'antd';
-import { PlusOutlined, EyeOutlined } from '@ant-design/icons';
+import { Button, Form, Input, Modal, Space, Table, Tag, message } from 'antd';
+import { EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import { createTask, getProject, listProjectTasks } from '../api';
 import type { Project, Task } from '../types';
-import { STAGES, STAGE_LABELS, STAGE_COLORS, type Stage } from '../types';
+import { STAGES, STAGE_COLORS, STAGE_LABELS, type Stage } from '../types';
+import { getErrorMessage } from '../utils/error';
 
 interface Props {
   onTaskSelect: (taskId: string | null) => void;
@@ -20,37 +21,47 @@ function Dashboard({ onTaskSelect }: Props) {
   const navigate = useNavigate();
 
   const fetchTasks = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId) {
+      return;
+    }
     setLoading(true);
     try {
       const data = await listProjectTasks(projectId);
       setTasks(data);
-    } catch {
-      message.error('任务列表加载失败');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '任务列表加载失败'));
     } finally {
       setLoading(false);
     }
   }, [projectId]);
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      return;
+    }
     let active = true;
     getProject(projectId)
       .then((data) => {
-        if (active) setProject(data);
+        if (active) {
+          setProject(data);
+        }
       })
-      .catch(() => {
-        message.error('项目加载失败');
+      .catch((error: unknown) => {
+        message.error(getErrorMessage(error, '项目加载失败'));
       });
     listProjectTasks(projectId)
       .then((data) => {
-        if (active) setTasks(data);
+        if (active) {
+          setTasks(data);
+        }
       })
-      .catch(() => {
-        message.error('任务列表加载失败');
+      .catch((error: unknown) => {
+        message.error(getErrorMessage(error, '任务列表加载失败'));
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       });
     return () => {
       active = false;
@@ -58,15 +69,17 @@ function Dashboard({ onTaskSelect }: Props) {
   }, [projectId]);
 
   const handleCreate = async (values: { title: string; request?: string }) => {
-    if (!projectId) return;
+    if (!projectId) {
+      return;
+    }
     try {
       await createTask(values.title, values.request || '', projectId);
       message.success('任务已创建');
       setModalOpen(false);
       form.resetFields();
-      fetchTasks();
-    } catch {
-      message.error('任务创建失败');
+      await fetchTasks();
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '任务创建失败'));
     }
   };
 
@@ -137,26 +150,15 @@ function Dashboard({ onTaskSelect }: Props) {
         <div>
           <h2 style={{ margin: 0 }}>{project?.name || '项目任务'}</h2>
           <p style={{ margin: '4px 0 0', color: '#667085', fontSize: 12 }}>
-            在当前项目内创建需求，然后按需求确认、开发、测试推进。
+            在当前项目内创建需求，然后按需求确认、实施开发、测试评审逐步推进。
           </p>
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
           新建任务
         </Button>
       </div>
-      <Table
-        columns={columns}
-        dataSource={tasks}
-        rowKey="task_id"
-        loading={loading}
-        pagination={{ pageSize: 10 }}
-      />
-      <Modal
-        title="新建任务"
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => form.submit()}
-      >
+      <Table columns={columns} dataSource={tasks} rowKey="task_id" loading={loading} pagination={{ pageSize: 10 }} />
+      <Modal title="新建任务" open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => form.submit()}>
         <Form form={form} layout="vertical" onFinish={handleCreate}>
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入任务标题' }]}>
             <Input placeholder="请输入任务标题" />

@@ -43,22 +43,23 @@ import type {
   TaskExecutionResult,
 } from '../types';
 import { AGENT_LABELS, STAGES, STAGE_COLORS, STAGE_LABELS } from '../types';
+import { getErrorMessage } from '../utils/error';
 
 const { TextArea } = Input;
 
 const AGENT_STATUS_LABELS: Record<string, string> = {
-  completed: 'Completed',
-  failed: 'Failed',
-  pending: 'Not run',
+  completed: '已完成',
+  failed: '失败',
+  pending: '未运行',
 };
 
 const FILE_LABELS: Record<string, string> = {
-  'request.md': 'Request',
-  'spec.md': 'Spec',
-  'implementation.md': 'Implementation',
-  'review.md': 'Review',
-  'fixes.md': 'Fixes',
-  'release.md': 'Release',
+  'request.md': '需求',
+  'spec.md': '产品规划',
+  'implementation.md': '实施方案',
+  'review.md': '测试评审',
+  'fixes.md': '修复记录',
+  'release.md': '发布记录',
 };
 
 function TaskDetail() {
@@ -119,12 +120,10 @@ function TaskDetail() {
       if (cancelled) {
         return;
       }
-      const taskResult = results[0];
-      if (taskResult.status === 'rejected') {
-        message.error('Failed to load task.');
+      if (results[0].status === 'rejected') {
+        message.error('任务加载失败');
       }
-      const requirementResult = results[1];
-      if (requirementResult.status === 'rejected') {
+      if (results[1].status === 'rejected') {
         setRequirements(null);
       }
       setLoading(false);
@@ -138,6 +137,20 @@ function TaskDetail() {
   const currentIdx = currentStage ? STAGES.indexOf(currentStage) : -1;
   const nextStage = currentIdx >= 0 && currentIdx < STAGES.length - 1 ? STAGES[currentIdx + 1] : null;
   const requirementsConfirmed = detail?.requirement_status === 'confirmed';
+
+  async function handleSaveFile() {
+    if (!taskId || !editingFile) {
+      return;
+    }
+    try {
+      await updateTaskFile(taskId, editingFile, editContent);
+      message.success('文件已保存');
+      setEditingFile(null);
+      await fetchTask();
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '文件保存失败'));
+    }
+  }
 
   const fileTabs = useMemo(
     () =>
@@ -154,9 +167,9 @@ function TaskDetail() {
             />
             <Space>
               <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveFile}>
-                Save
+                保存
               </Button>
-              <Button onClick={() => setEditingFile(null)}>Cancel</Button>
+              <Button onClick={() => setEditingFile(null)}>取消</Button>
             </Space>
           </div>
         ) : (
@@ -169,7 +182,7 @@ function TaskDetail() {
                 setEditContent(content);
               }}
             >
-              Edit
+              编辑
             </Button>
             <pre
               style={{
@@ -194,15 +207,15 @@ function TaskDetail() {
       return;
     }
     if (nextStage === 'implement' && !requirementsConfirmed) {
-      message.warning('Confirm requirements before entering implementation.');
+      message.warning('请先确认需求，再进入实施阶段');
       return;
     }
     try {
       await advanceTask(taskId, nextStage);
-      message.success(`Moved to ${STAGE_LABELS[nextStage as Stage]}.`);
+      message.success(`已推进到${STAGE_LABELS[nextStage as Stage]}`);
       await fetchTask();
-    } catch {
-      message.error('Failed to advance task stage.');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '阶段推进失败'));
     }
   }
 
@@ -215,9 +228,9 @@ function TaskDetail() {
       const updated = await addRequirementMessage(taskId, 'user', requirementMessage.trim());
       setRequirements(updated);
       setRequirementMessage('');
-      message.success('Requirement note recorded.');
-    } catch {
-      message.error('Failed to save requirement note.');
+      message.success('需求补充已记录');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '需求补充保存失败'));
     } finally {
       setRequirementsLoading(false);
     }
@@ -225,32 +238,18 @@ function TaskDetail() {
 
   async function handleConfirmRequirements() {
     if (!taskId || !requirementSummary.trim()) {
-      message.warning('Requirement summary is required.');
+      message.warning('请填写确认后的需求摘要');
       return;
     }
     setRequirementsLoading(true);
     try {
       await confirmRequirements(taskId, requirementSummary.trim());
-      message.success('Requirements confirmed.');
+      message.success('需求已确认');
       await Promise.all([fetchTask(), fetchRequirements()]);
-    } catch {
-      message.error('Failed to confirm requirements.');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '需求确认失败'));
     } finally {
       setRequirementsLoading(false);
-    }
-  }
-
-  async function handleSaveFile() {
-    if (!taskId || !editingFile) {
-      return;
-    }
-    try {
-      await updateTaskFile(taskId, editingFile, editContent);
-      message.success('File saved.');
-      setEditingFile(null);
-      await fetchTask();
-    } catch {
-      message.error('Failed to save file.');
     }
   }
 
@@ -262,11 +261,10 @@ function TaskDetail() {
     try {
       const results = await runAgentWorkflow(taskId);
       setAgents(results);
-      message.success('Analysis agents finished.');
+      message.success('辅助代理分析已完成');
       await fetchTask();
     } catch (error: unknown) {
-      const err = error as Error;
-      message.error(`Agent workflow failed: ${err.message}`);
+      message.error(getErrorMessage(error, '辅助代理分析失败'));
     } finally {
       setAgentsLoading(false);
     }
@@ -280,18 +278,17 @@ function TaskDetail() {
     try {
       const result = await executeTask(taskId);
       setExecutionResult(result);
-      message.success('Implementation workflow finished.');
+      message.success('实施流程执行完成');
       await Promise.all([fetchTask(), fetchAgents()]);
     } catch (error: unknown) {
-      const err = error as Error;
-      message.error(`Execution failed: ${err.message}`);
+      message.error(getErrorMessage(error, '实施流程执行失败'));
     } finally {
       setExecutionLoading(false);
     }
   }
 
   if (!detail) {
-    return loading ? <p>Loading...</p> : <p>Task not found.</p>;
+    return loading ? <p>加载中...</p> : <p>任务不存在</p>;
   }
 
   const agentByRole = new Map(agents.map((agent) => [agent.role, agent]));
@@ -305,7 +302,7 @@ function TaskDetail() {
         onClick={() => navigate(projectId ? `/projects/${projectId}` : '/')}
         style={{ marginBottom: 16, paddingLeft: 0 }}
       >
-        Back to tasks
+        返回任务列表
       </Button>
 
       <div className="page-surface task-summary">
@@ -316,40 +313,40 @@ function TaskDetail() {
           size="small"
           extra={
             nextStage ? (
-              <Popconfirm title={`Move to ${STAGE_LABELS[nextStage as Stage]}?`} onConfirm={handleAdvance}>
+              <Popconfirm title={`确认推进到${STAGE_LABELS[nextStage as Stage]}？`} onConfirm={handleAdvance}>
                 <Button
                   type="default"
                   icon={<StepForwardOutlined />}
                   disabled={nextStage === 'implement' && !requirementsConfirmed}
                 >
-                  Move to {STAGE_LABELS[nextStage as Stage]}
+                  推进到{STAGE_LABELS[nextStage as Stage]}
                 </Button>
               </Popconfirm>
             ) : (
-              <Tag color="green">Completed</Tag>
+              <Tag color="green">已完成</Tag>
             )
           }
         >
-          <Descriptions.Item label="Task ID">
+          <Descriptions.Item label="任务 ID">
             <code style={{ fontSize: 12 }}>{detail.task_id}</code>
           </Descriptions.Item>
-          <Descriptions.Item label="Project">
-            {projectId || detail.project_id || '(unbound)'}
+          <Descriptions.Item label="所属项目">
+            {projectId || detail.project_id || '未绑定'}
           </Descriptions.Item>
-          <Descriptions.Item label="Stage">
+          <Descriptions.Item label="当前阶段">
             <Tag color={STAGE_COLORS[detail.current_stage as Stage]}>
               {STAGE_LABELS[detail.current_stage as Stage]}
             </Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="Requirements">
+          <Descriptions.Item label="需求状态">
             <Tag color={requirementsConfirmed ? 'green' : 'orange'}>
-              {requirementsConfirmed ? 'Confirmed' : 'Drafting'}
+              {requirementsConfirmed ? '已确认' : '待确认'}
             </Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="Created">
+          <Descriptions.Item label="创建时间">
             {new Date(detail.created_at).toLocaleString('zh-CN')}
           </Descriptions.Item>
-          <Descriptions.Item label="Updated">
+          <Descriptions.Item label="更新时间">
             {new Date(detail.updated_at).toLocaleString('zh-CN')}
           </Descriptions.Item>
         </Descriptions>
@@ -358,16 +355,16 @@ function TaskDetail() {
       <div className="page-surface requirements-panel">
         <div className="section-heading">
           <div>
-            <h3>Requirements</h3>
-            <p>Lock the approved requirement first. Implementation should start from this summary.</p>
+            <h3>需求确认</h3>
+            <p>先把需求摘要锁定，后续实施将以这份确认内容为准。</p>
           </div>
-          <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? 'Locked' : 'Open'}</Tag>
+          <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
         {nextStage === 'implement' && !requirementsConfirmed && (
           <Alert
             type="warning"
             showIcon
-            message="This task cannot enter implementation until the requirement is confirmed."
+            message="当前任务还不能进入实施阶段，请先确认需求。"
             style={{ marginBottom: 12 }}
           />
         )}
@@ -376,13 +373,13 @@ function TaskDetail() {
             requirements.messages.map((item, index) => (
               <div className={`requirement-message ${item.role}`} key={`${item.created_at}-${index}`}>
                 <Tag color={item.role === 'product_manager' ? 'blue' : 'default'}>
-                  {item.role === 'product_manager' ? 'PM' : 'User'}
+                  {item.role === 'product_manager' ? '产品经理' : '用户'}
                 </Tag>
                 <span>{item.content}</span>
               </div>
             ))
           ) : (
-            <p className="empty-copy">No requirement discussion yet.</p>
+            <p className="empty-copy">暂时没有需求对话记录。</p>
           )}
         </div>
         {!requirementsConfirmed && (
@@ -391,11 +388,11 @@ function TaskDetail() {
               value={requirementMessage}
               onChange={(event) => setRequirementMessage(event.target.value)}
               rows={3}
-              placeholder="Add constraints, acceptance criteria, or extra context."
+              placeholder="补充约束、验收标准或额外上下文。"
             />
             <Space style={{ marginTop: 8 }}>
               <Button icon={<SendOutlined />} loading={requirementsLoading} onClick={handleAddRequirementMessage}>
-                Record note
+                记录补充
               </Button>
             </Space>
           </div>
@@ -406,7 +403,7 @@ function TaskDetail() {
             onChange={(event) => setRequirementSummary(event.target.value)}
             rows={5}
             disabled={requirementsConfirmed}
-            placeholder="Write the final confirmed requirement summary."
+            placeholder="填写最终确认的需求摘要。"
           />
           {!requirementsConfirmed && (
             <Space style={{ marginTop: 8 }}>
@@ -416,7 +413,7 @@ function TaskDetail() {
                 loading={requirementsLoading}
                 onClick={handleConfirmRequirements}
               >
-                Confirm requirements
+                确认需求
               </Button>
             </Space>
           )}
@@ -426,10 +423,8 @@ function TaskDetail() {
       <div className="page-surface agents-panel">
         <div className="section-heading">
           <div>
-            <h3>Execution</h3>
-            <p>
-              This is the main workflow. It selects project files, generates code changes, applies them, and runs tests.
-            </p>
+            <h3>开始实施</h3>
+            <p>这是主流程。系统会选择项目文件、生成改动、写回代码并执行测试。</p>
           </div>
           <Button
             type="primary"
@@ -438,7 +433,7 @@ function TaskDetail() {
             disabled={!requirementsConfirmed}
             onClick={handleExecuteTask}
           >
-            Start implementation
+            开始实施
           </Button>
         </div>
         {!requirementsConfirmed && (
@@ -446,35 +441,35 @@ function TaskDetail() {
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="Confirm the requirement summary first. Then the implementation workflow can run end to end."
+            message="请先确认需求摘要，确认后才能执行实施流程。"
           />
         )}
         {executionResult && (
-          <Card size="small" title="Latest execution result">
+          <Card size="small" title="最近一次实施结果">
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
               <div>
-                <strong>Summary</strong>
+                <strong>结果摘要</strong>
                 <pre>{executionResult.summary}</pre>
               </div>
               <div>
-                <strong>Selected files</strong>
-                <pre>{executionResult.selected_paths.join('\n') || '(none)'}</pre>
+                <strong>选中文件</strong>
+                <pre>{executionResult.selected_paths.join('\n') || '无'}</pre>
               </div>
               <div>
-                <strong>Written files</strong>
-                <pre>{executionResult.written.join('\n') || '(none)'}</pre>
+                <strong>写回文件</strong>
+                <pre>{executionResult.written.join('\n') || '无'}</pre>
               </div>
               <div>
-                <strong>Test command</strong>
-                <pre>{executionResult.test_command || '(none)'}</pre>
+                <strong>测试命令</strong>
+                <pre>{executionResult.test_command || '无'}</pre>
               </div>
               <div>
-                <strong>Test exit code</strong>
+                <strong>测试退出码</strong>
                 <pre>{String(executionResult.test_exit_code)}</pre>
               </div>
               <div>
-                <strong>Test output</strong>
-                <pre>{executionResult.test_output || '(no output)'}</pre>
+                <strong>测试输出</strong>
+                <pre>{executionResult.test_output || '无输出'}</pre>
               </div>
             </Space>
           </Card>
@@ -484,13 +479,11 @@ function TaskDetail() {
       <div className="page-surface agents-panel">
         <div className="section-heading">
           <div>
-            <h3>Analysis agents</h3>
-            <p>
-              These agents only produce supporting documents. They do not apply code changes to the project workspace.
-            </p>
+            <h3>辅助代理分析</h3>
+            <p>这部分只产出辅助文档，不会真正修改项目代码。</p>
           </div>
           <Button type="default" icon={<TeamOutlined />} loading={agentsLoading} onClick={handleRunAgents}>
-            Run analysis
+            运行辅助代理
           </Button>
         </div>
         <Row gutter={[12, 12]}>
@@ -512,7 +505,7 @@ function TaskDetail() {
                     )
                   }
                 >
-                  <pre>{result?.error || result?.content || 'No result yet.'}</pre>
+                  <pre>{result?.error || result?.content || '暂无结果'}</pre>
                 </Card>
               </Col>
             );
@@ -525,7 +518,7 @@ function TaskDetail() {
       </div>
 
       {detail.journal && (
-        <Card title="Journal" size="small" style={{ marginTop: 16 }}>
+        <Card title="日志" size="small" style={{ marginTop: 16 }}>
           <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#666' }}>{detail.journal}</pre>
         </Card>
       )}
