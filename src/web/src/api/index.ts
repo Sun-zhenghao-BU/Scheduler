@@ -1,5 +1,19 @@
 import axios from 'axios';
-import type { AgentResult, DevelopmentProposal, Project, Task, TaskDetail, LLMConfig, RequirementSession, TestCommandResult, WorkspaceFile, WorkspaceInfo, WorkspaceItem } from '../types';
+import type {
+  AgentResult,
+  DevelopmentProposal,
+  LLMConfig,
+  OpenRoot,
+  OpenRootChild,
+  Project,
+  RequirementSession,
+  Task,
+  TaskDetail,
+  TestCommandResult,
+  WorkspaceFile,
+  WorkspaceInfo,
+  WorkspaceItem,
+} from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -14,6 +28,23 @@ export async function listProjects(): Promise<Project[]> {
 
 export async function createProject(name: string, rootPath = ''): Promise<Project> {
   const { data } = await api.post<Project>('/projects/', { name, root_path: rootPath });
+  return data;
+}
+
+export async function pickProjectFolder(): Promise<{ selected: boolean; path: string }> {
+  const { data } = await api.post<{ selected: boolean; path: string }>('/projects/pick-folder');
+  return data;
+}
+
+export async function listOpenRoots(): Promise<OpenRoot[]> {
+  const { data } = await api.get<OpenRoot[]>('/projects/open-roots');
+  return data;
+}
+
+export async function listOpenRootChildren(rootId: string, relativePath = ''): Promise<OpenRootChild[]> {
+  const { data } = await api.get<OpenRootChild[]>(`/projects/open-roots/${rootId}/children`, {
+    params: relativePath ? { relative_path: relativePath } : undefined,
+  });
   return data;
 }
 

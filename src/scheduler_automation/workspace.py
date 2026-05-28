@@ -67,6 +67,25 @@ class Workspace:
             )
         return results
 
+    def list_directories(self, relative_path: str = "") -> list[WorkspaceItem]:
+        target = self._resolve(relative_path) if relative_path else self.root
+        if not target.exists() or not target.is_dir():
+            raise WorkspaceAccessError("Directory does not exist.")
+
+        results: list[WorkspaceItem] = []
+        for path in sorted(target.iterdir()):
+            if not path.is_dir() or self._is_ignored(path):
+                continue
+            relative = path.relative_to(self.root).as_posix()
+            results.append(
+                {
+                    "path": relative,
+                    "name": path.name,
+                    "type": "directory",
+                }
+            )
+        return results
+
     def read_file(self, relative_path: str) -> dict[str, str | int]:
         path = self._resolve(relative_path)
         if not path.exists() or not path.is_file():

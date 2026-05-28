@@ -17,6 +17,19 @@ export interface Project {
   updated_at: string;
 }
 
+export interface OpenRoot {
+  root_id: string;
+  label: string;
+  path: string;
+}
+
+export interface OpenRootChild {
+  name: string;
+  path: string;
+  relative_path: string;
+  type: 'directory';
+}
+
 export interface TaskDetail extends Task {
   files: Record<string, string>;
   journal: string;

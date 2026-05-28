@@ -84,6 +84,8 @@ Build and run the full stack:
 
 ```powershell
 $env:PROJECT_ROOT="D:\Work\YourProject"
+$env:HOST_WORK_PATH="D:\Work"
+$env:HOST_HOME_PATH="C:\Users\SZH"
 docker compose up -d --build
 ```
 
@@ -100,10 +102,13 @@ This starts:
 - **API** under `/api/`
 - **Health check** at `/healthz`
 - **Project workspace** mounted at `/workspace/project`
+- **Open Folder roots** mounted at `/host/work` and `/host/home`
 
 FastAPI serves the built frontend and API from the same container.
 
 LLM config and task data are persisted in Docker volumes. The local path in `PROJECT_ROOT` is mounted into the container so approved changes can be written back to the project and become visible in PyCharm.
+
+When you use **打开文件夹** in the UI, the folder chooser browses these mounted roots instead of arbitrary host paths. If you want other local folders to be selectable, expand `HOST_WORK_PATH` / `HOST_HOME_PATH` or add more mounts and update `SCHEDULER_OPEN_ROOTS`.
 
 ### Web UI + API Server (development)
 

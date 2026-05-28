@@ -1,19 +1,49 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Empty, Form, Input, List, Modal, Space, Tag, Tree, message } from 'antd';
+import type { DataNode } from 'antd/es/tree';
 import { FolderOpenOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
-import { createProject, getWorkspaceTree, listProjects } from '../api';
-import type { Project, WorkspaceItem } from '../types';
+import { createProject, listOpenRootChildren, listOpenRoots, listProjects } from '../api';
+import type { OpenRoot, Project } from '../types';
+
+type DirectoryTarget = 'create' | 'open-local';
+type DirectoryNode = DataNode & {
+  rootId: string;
+  relativePath: string;
+  absolutePath: string;
+};
+
+function basename(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] || normalized || 'project';
+}
+
+function createRootNode(root: OpenRoot): DirectoryNode {
+  return {
+    title: root.label,
+    key: `root:${root.root_id}`,
+    rootId: root.root_id,
+    relativePath: '',
+    absolutePath: root.path,
+    isLeaf: false,
+    children: [],
+  };
+}
 
 function ProjectHome() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [openLocalModalOpen, setOpenLocalModalOpen] = useState(false);
   const [existingProjectsOpen, setExistingProjectsOpen] = useState(false);
   const [directoryModalOpen, setDirectoryModalOpen] = useState(false);
-  const [workspaceItems, setWorkspaceItems] = useState<WorkspaceItem[]>([]);
-  const [workspaceLoading, setWorkspaceLoading] = useState(false);
-  const [form] = Form.useForm();
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [openRoots, setOpenRoots] = useState<OpenRoot[]>([]);
+  const [directoryTree, setDirectoryTree] = useState<DirectoryNode[]>([]);
+  const [directoryTarget, setDirectoryTarget] = useState<DirectoryTarget>('create');
+  const [createForm] = Form.useForm();
+  const [openLocalForm] = Form.useForm();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -35,6 +65,7 @@ function ProjectHome() {
 
   const openProject = (projectId: string) => {
     setExistingProjectsOpen(false);
+    setOpenLocalModalOpen(false);
     navigate(`/projects/${projectId}`);
   };
 
@@ -42,37 +73,89 @@ function ProjectHome() {
     try {
       const project = await createProject(values.name, values.root_path || '');
       message.success('项目已创建');
-      setModalOpen(false);
-      form.resetFields();
+      setCreateModalOpen(false);
+      createForm.resetFields();
       navigate(`/projects/${project.project_id}`);
     } catch {
       message.error('项目创建失败');
     }
   };
 
-  const openDirectoryPicker = async () => {
-    setDirectoryModalOpen(true);
-    setWorkspaceLoading(true);
+  const handleOpenLocal = async (values: { name?: string; root_path: string }) => {
+    const rootPath = values.root_path.trim();
+    const existing = projects.find((project) => project.root_path === rootPath);
+    if (existing) {
+      message.success('已打开现有项目');
+      openProject(existing.project_id);
+      return;
+    }
+
     try {
-      setWorkspaceItems(await getWorkspaceTree());
+      const project = await createProject(values.name?.trim() || basename(rootPath), rootPath);
+      message.success('本地项目已打开');
+      setOpenLocalModalOpen(false);
+      openLocalForm.resetFields();
+      navigate(`/projects/${project.project_id}`);
     } catch {
-      message.error('目录树加载失败');
-    } finally {
-      setWorkspaceLoading(false);
+      message.error('打开本地项目失败');
     }
   };
 
-  const directoryTree = useMemo(
-    () =>
-      workspaceItems
-        .filter((item) => item.type === 'directory')
-        .map((item) => ({
-          title: item.path || '/',
-          key: item.path || '.',
-          isLeaf: true,
-        })),
-    [workspaceItems],
-  );
+  const openDirectoryBrowser = async (target: DirectoryTarget) => {
+    setDirectoryTarget(target);
+    setDirectoryModalOpen(true);
+    setDirectoryLoading(true);
+    try {
+      const roots = await listOpenRoots();
+      setOpenRoots(roots);
+      setDirectoryTree(roots.map(createRootNode));
+    } catch {
+      message.error('可访问目录根加载失败');
+    } finally {
+      setDirectoryLoading(false);
+    }
+  };
+
+  const updateTreeNodes = (nodes: DirectoryNode[], key: string, children: DirectoryNode[]): DirectoryNode[] =>
+    nodes.map((node) => {
+      if (node.key === key) {
+        return { ...node, children };
+      }
+      if (node.children) {
+        return {
+          ...node,
+          children: updateTreeNodes(node.children as DirectoryNode[], key, children),
+        };
+      }
+      return node;
+    });
+
+  const loadTreeData = async (node: DataNode): Promise<void> => {
+    const directoryNode = node as DirectoryNode;
+    if (directoryNode.children && directoryNode.children.length > 0) {
+      return;
+    }
+    const children = await listOpenRootChildren(directoryNode.rootId, directoryNode.relativePath);
+    const mapped: DirectoryNode[] = children.map((child) => ({
+      title: child.name,
+      key: `dir:${directoryNode.rootId}:${child.relative_path}`,
+      rootId: directoryNode.rootId,
+      relativePath: child.relative_path,
+      absolutePath: child.path,
+      isLeaf: false,
+      children: [],
+    }));
+    setDirectoryTree((current) => updateTreeNodes(current, String(directoryNode.key), mapped));
+  };
+
+  const applySelectedDirectory = (node: DirectoryNode) => {
+    const form = directoryTarget === 'create' ? createForm : openLocalForm;
+    form.setFieldValue('root_path', node.absolutePath);
+    if (directoryTarget === 'open-local' && !form.getFieldValue('name')) {
+      form.setFieldValue('name', basename(node.absolutePath));
+    }
+    setDirectoryModalOpen(false);
+  };
 
   return (
     <div className="project-home">
@@ -80,34 +163,37 @@ function ProjectHome() {
         <div className="page-surface project-action-card">
           <h3>创建项目</h3>
           <p>从一个新项目开始，把后续需求、开发和测试都归到这个项目里。</p>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
             创建项目
           </Button>
         </div>
         <div className="page-surface project-action-card">
-          <h3>打开项目</h3>
-          <p>继续已有项目中的任务流，回到需求确认、开发或测试阶段。</p>
-          <Button icon={<FolderOpenOutlined />} onClick={() => setExistingProjectsOpen(true)}>
-            查看已有项目
-          </Button>
+          <h3>打开本地项目</h3>
+          <p>从 Docker 已挂载的目录根中选择一个文件夹，把它作为项目工作区。</p>
+          <Space>
+            <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => setOpenLocalModalOpen(true)}>
+              打开文件夹
+            </Button>
+            <Button onClick={() => setExistingProjectsOpen(true)}>已有项目</Button>
+          </Space>
         </div>
       </div>
 
-      <div id="project-list" className="page-surface project-entry">
+      <div className="page-surface project-entry">
         <div className="section-heading">
           <div>
             <h3>已有项目</h3>
-            <p>打开一个项目后，任务面板和项目工作区会在侧边栏中出现。</p>
+            <p>已绑定目录的项目会直接进入对应工作区；未绑定目录的项目需要先补充路径。</p>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
             新建项目
           </Button>
         </div>
 
         {projects.length === 0 && !loading ? (
           <Empty description="还没有项目">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
-              新建第一个项目
+            <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => setOpenLocalModalOpen(true)}>
+              打开第一个本地项目
             </Button>
           </Empty>
         ) : (
@@ -145,21 +231,45 @@ function ProjectHome() {
       </div>
 
       <Modal
-        title="新建项目"
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => form.submit()}
+        title="创建项目"
+        open={createModalOpen}
+        onCancel={() => setCreateModalOpen(false)}
+        onOk={() => createForm.submit()}
       >
-        <Form form={form} layout="vertical" onFinish={handleCreate}>
+        <Form form={createForm} layout="vertical" onFinish={handleCreate}>
           <Form.Item name="name" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }]}>
             <Input placeholder="例如：Scheduler 自动化平台" />
           </Form.Item>
           <Form.Item name="root_path" label="本地目录（可选）">
             <Space.Compact style={{ width: '100%' }}>
-              <Input placeholder="选择已挂载目录，或手动输入路径" />
-              <Button onClick={openDirectoryPicker}>选择目录</Button>
+              <Input readOnly placeholder="可选：从已挂载目录中选择" />
+              <Button onClick={() => openDirectoryBrowser('create')}>选择目录</Button>
             </Space.Compact>
           </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="打开本地项目"
+        open={openLocalModalOpen}
+        onCancel={() => setOpenLocalModalOpen(false)}
+        onOk={() => openLocalForm.submit()}
+      >
+        <Form form={openLocalForm} layout="vertical" onFinish={handleOpenLocal}>
+          <Form.Item name="name" label="项目名称（可选）">
+            <Input placeholder="默认使用目录名" />
+          </Form.Item>
+          <Form.Item name="root_path" label="项目目录" rules={[{ required: true, message: '请先选择项目目录' }]}>
+            <Input readOnly placeholder="请选择目录" />
+          </Form.Item>
+          <Space>
+            <Button type="primary" onClick={() => openDirectoryBrowser('open-local')}>
+              选择文件夹
+            </Button>
+          </Space>
+          <div style={{ color: '#667085', fontSize: 12, marginTop: 12 }}>
+            目录来源于 Docker 预挂载的宿主目录根。当前目录会绑定到项目，后续开发和测试都在该路径下执行。
+          </div>
         </Form>
       </Modal>
 
@@ -200,25 +310,21 @@ function ProjectHome() {
       </Modal>
 
       <Modal
-        title="选择已挂载目录"
+        title="选择项目目录"
         open={directoryModalOpen}
         onCancel={() => setDirectoryModalOpen(false)}
         footer={null}
       >
-        {workspaceLoading ? (
-          <Empty description="正在加载目录" />
-        ) : directoryTree.length === 0 ? (
-          <Empty description="当前挂载工作区没有可选目录" />
+        {directoryLoading ? (
+          <Empty description="正在加载目录根" />
+        ) : openRoots.length === 0 ? (
+          <Empty description="当前没有可访问的挂载目录，请先配置 Docker 挂载。" />
         ) : (
           <Tree
             showIcon
+            loadData={loadTreeData}
             treeData={directoryTree}
-            onSelect={(keys) => {
-              const selected = String(keys[0] || '');
-              if (!selected) return;
-              form.setFieldValue('root_path', selected === '.' ? '/workspace/project' : `/workspace/project/${selected}`);
-              setDirectoryModalOpen(false);
-            }}
+            onSelect={(_keys, info) => applySelectedDirectory(info.node as DirectoryNode)}
           />
         )}
       </Modal>
