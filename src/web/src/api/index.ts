@@ -31,6 +31,11 @@ export async function createProject(name: string, rootPath = ''): Promise<Projec
   return data;
 }
 
+export async function updateProject(projectId: string, rootPath: string): Promise<Project> {
+  const { data } = await api.put<Project>(`/projects/${projectId}`, { root_path: rootPath });
+  return data;
+}
+
 export async function pickProjectFolder(): Promise<{ selected: boolean; path: string }> {
   const { data } = await api.post<{ selected: boolean; path: string }>('/projects/pick-folder');
   return data;

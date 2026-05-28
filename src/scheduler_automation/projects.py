@@ -57,6 +57,23 @@ class ProjectManager:
                 return project
         raise FileNotFoundError(f"Project '{project_id}' does not exist.")
 
+    def update_project_root_path(self, project_id: str, root_path: str) -> ProjectMetadata:
+        projects = self.list_projects()
+        for index, project in enumerate(projects):
+            if project.project_id != project_id:
+                continue
+            updated = ProjectMetadata(
+                project_id=project.project_id,
+                name=project.name,
+                root_path=root_path.strip(),
+                created_at=project.created_at,
+                updated_at=utc_timestamp(),
+            )
+            projects[index] = updated
+            self._write_projects(projects)
+            return updated
+        raise FileNotFoundError(f"Project '{project_id}' does not exist.")
+
     def _write_projects(self, projects: list[ProjectMetadata]) -> None:
         self.index_path.write_text(
             json.dumps({"projects": [asdict(project) for project in projects]}, indent=2, ensure_ascii=True) + "\n",

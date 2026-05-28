@@ -28,6 +28,10 @@ class CreateProjectRequest(BaseModel):
     root_path: str = ""
 
 
+class UpdateProjectRequest(BaseModel):
+    root_path: str
+
+
 class ProjectResponse(BaseModel):
     project_id: str
     name: str
@@ -101,6 +105,15 @@ def create_project(req: CreateProjectRequest):
         project = get_project_manager().create_project(req.name, req.root_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return ProjectResponse(**asdict(project))
+
+
+@router.put("/{project_id}", response_model=ProjectResponse)
+def update_project(project_id: str, req: UpdateProjectRequest):
+    try:
+        project = get_project_manager().update_project_root_path(project_id, req.root_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
     return ProjectResponse(**asdict(project))
 
 

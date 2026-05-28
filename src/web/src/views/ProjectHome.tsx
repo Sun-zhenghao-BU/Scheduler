@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button, Empty, Form, Input, List, Modal, Space, Tag, Tree, message } from 'antd';
 import type { DataNode } from 'antd/es/tree';
 import { FolderOpenOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
-import { createProject, listOpenRootChildren, listOpenRoots, listProjects } from '../api';
+import { createProject, listOpenRootChildren, listOpenRoots, listProjects, updateProject } from '../api';
 import type { OpenRoot, Project } from '../types';
 
 type DirectoryTarget = 'create' | 'open-local';
@@ -42,6 +42,7 @@ function ProjectHome() {
   const [openRoots, setOpenRoots] = useState<OpenRoot[]>([]);
   const [directoryTree, setDirectoryTree] = useState<DirectoryNode[]>([]);
   const [directoryTarget, setDirectoryTarget] = useState<DirectoryTarget>('create');
+  const [bindingProject, setBindingProject] = useState<Project | null>(null);
   const [createForm] = Form.useForm();
   const [openLocalForm] = Form.useForm();
   const navigate = useNavigate();
@@ -66,7 +67,18 @@ function ProjectHome() {
   const openProject = (projectId: string) => {
     setExistingProjectsOpen(false);
     setOpenLocalModalOpen(false);
+    setBindingProject(null);
     navigate(`/projects/${projectId}`);
+  };
+
+  const startBindingProject = (project: Project) => {
+    setBindingProject(project);
+    openLocalForm.setFieldsValue({
+      name: project.name,
+      root_path: project.root_path || '',
+    });
+    setExistingProjectsOpen(false);
+    setOpenLocalModalOpen(true);
   };
 
   const handleCreate = async (values: { name: string; root_path?: string }) => {
@@ -83,6 +95,22 @@ function ProjectHome() {
 
   const handleOpenLocal = async (values: { name?: string; root_path: string }) => {
     const rootPath = values.root_path.trim();
+
+    if (bindingProject) {
+      try {
+        await updateProject(bindingProject.project_id, rootPath);
+        message.success('项目目录已绑定');
+        const projectId = bindingProject.project_id;
+        setBindingProject(null);
+        setOpenLocalModalOpen(false);
+        openLocalForm.resetFields();
+        navigate(`/projects/${projectId}`);
+      } catch {
+        message.error('绑定项目目录失败');
+      }
+      return;
+    }
+
     const existing = projects.find((project) => project.root_path === rootPath);
     if (existing) {
       message.success('已打开现有项目');
@@ -151,7 +179,7 @@ function ProjectHome() {
   const applySelectedDirectory = (node: DirectoryNode) => {
     const form = directoryTarget === 'create' ? createForm : openLocalForm;
     form.setFieldValue('root_path', node.absolutePath);
-    if (directoryTarget === 'open-local' && !form.getFieldValue('name')) {
+    if (directoryTarget === 'open-local' && !bindingProject && !form.getFieldValue('name')) {
       form.setFieldValue('name', basename(node.absolutePath));
     }
     setDirectoryModalOpen(false);
@@ -162,16 +190,24 @@ function ProjectHome() {
       <div className="project-actions">
         <div className="page-surface project-action-card">
           <h3>创建项目</h3>
-          <p>从一个新项目开始，把后续需求、开发和测试都归到这个项目里。</p>
+          <p>创建一个新的调度项目，把后续需求、开发和测试都归到这个项目里。</p>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
             创建项目
           </Button>
         </div>
         <div className="page-surface project-action-card">
           <h3>打开本地项目</h3>
-          <p>从 Docker 已挂载的目录根中选择一个文件夹，把它作为项目工作区。</p>
+          <p>从 Docker 已挂载的目录根中选择一个文件夹，把它绑定为项目工作区。</p>
           <Space>
-            <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => setOpenLocalModalOpen(true)}>
+            <Button
+              type="primary"
+              icon={<FolderOpenOutlined />}
+              onClick={() => {
+                setBindingProject(null);
+                openLocalForm.resetFields();
+                setOpenLocalModalOpen(true);
+              }}
+            >
               打开文件夹
             </Button>
             <Button onClick={() => setExistingProjectsOpen(true)}>已有项目</Button>
@@ -183,7 +219,7 @@ function ProjectHome() {
         <div className="section-heading">
           <div>
             <h3>已有项目</h3>
-            <p>已绑定目录的项目会直接进入对应工作区；未绑定目录的项目需要先补充路径。</p>
+            <p>已绑定目录的项目可以直接进入；未绑定目录的项目先补绑目录再继续使用。</p>
           </div>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
             新建项目
@@ -192,7 +228,15 @@ function ProjectHome() {
 
         {projects.length === 0 && !loading ? (
           <Empty description="还没有项目">
-            <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => setOpenLocalModalOpen(true)}>
+            <Button
+              type="primary"
+              icon={<FolderOpenOutlined />}
+              onClick={() => {
+                setBindingProject(null);
+                openLocalForm.resetFields();
+                setOpenLocalModalOpen(true);
+              }}
+            >
               打开第一个本地项目
             </Button>
           </Empty>
@@ -204,14 +248,20 @@ function ProjectHome() {
               <List.Item
                 className="project-item"
                 actions={[
-                  <Button
-                    key="open"
-                    type="link"
-                    icon={<RightOutlined />}
-                    onClick={() => openProject(project.project_id)}
-                  >
-                    打开
-                  </Button>,
+                  project.root_path ? (
+                    <Button
+                      key="open"
+                      type="link"
+                      icon={<RightOutlined />}
+                      onClick={() => openProject(project.project_id)}
+                    >
+                      打开
+                    </Button>
+                  ) : (
+                    <Button key="bind" type="link" onClick={() => startBindingProject(project)}>
+                      绑定目录
+                    </Button>
+                  ),
                 ]}
               >
                 <List.Item.Meta
@@ -250,14 +300,17 @@ function ProjectHome() {
       </Modal>
 
       <Modal
-        title="打开本地项目"
+        title={bindingProject ? `绑定项目目录：${bindingProject.name}` : '打开本地项目'}
         open={openLocalModalOpen}
-        onCancel={() => setOpenLocalModalOpen(false)}
+        onCancel={() => {
+          setBindingProject(null);
+          setOpenLocalModalOpen(false);
+        }}
         onOk={() => openLocalForm.submit()}
       >
         <Form form={openLocalForm} layout="vertical" onFinish={handleOpenLocal}>
           <Form.Item name="name" label="项目名称（可选）">
-            <Input placeholder="默认使用目录名" />
+            <Input placeholder="默认使用目录名" disabled={Boolean(bindingProject)} />
           </Form.Item>
           <Form.Item name="root_path" label="项目目录" rules={[{ required: true, message: '请先选择项目目录' }]}>
             <Input readOnly placeholder="请选择目录" />
@@ -268,7 +321,7 @@ function ProjectHome() {
             </Button>
           </Space>
           <div style={{ color: '#667085', fontSize: 12, marginTop: 12 }}>
-            目录来源于 Docker 预挂载的宿主目录根。当前目录会绑定到项目，后续开发和测试都在该路径下执行。
+            目录来源于 Docker 预挂载的宿主目录根。绑定后，任务工作区、开发和测试都在该路径下执行。
           </div>
         </Form>
       </Modal>
@@ -288,9 +341,15 @@ function ProjectHome() {
             renderItem={(project) => (
               <List.Item
                 actions={[
-                  <Button key="open" type="primary" onClick={() => openProject(project.project_id)}>
-                    打开
-                  </Button>,
+                  project.root_path ? (
+                    <Button key="open" type="primary" onClick={() => openProject(project.project_id)}>
+                      打开
+                    </Button>
+                  ) : (
+                    <Button key="bind" type="primary" onClick={() => startBindingProject(project)}>
+                      绑定目录
+                    </Button>
+                  ),
                 ]}
               >
                 <List.Item.Meta
