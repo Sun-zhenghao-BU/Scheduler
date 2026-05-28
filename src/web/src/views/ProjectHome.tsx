@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Empty, Form, Input, List, Modal, Space, Tag, Tree, message } from 'antd';
 import { FolderOpenOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
@@ -9,6 +9,7 @@ function ProjectHome() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [existingProjectsOpen, setExistingProjectsOpen] = useState(false);
   const [directoryModalOpen, setDirectoryModalOpen] = useState(false);
   const [workspaceItems, setWorkspaceItems] = useState<WorkspaceItem[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
@@ -31,6 +32,11 @@ function ProjectHome() {
       active = false;
     };
   }, []);
+
+  const openProject = (projectId: string) => {
+    setExistingProjectsOpen(false);
+    navigate(`/projects/${projectId}`);
+  };
 
   const handleCreate = async (values: { name: string; root_path?: string }) => {
     try {
@@ -56,20 +62,24 @@ function ProjectHome() {
     }
   };
 
-  const directoryTree = workspaceItems
-    .filter(item => item.type === 'directory')
-    .map(item => ({
-      title: item.path || '/',
-      key: item.path || '.',
-      isLeaf: true,
-    }));
+  const directoryTree = useMemo(
+    () =>
+      workspaceItems
+        .filter((item) => item.type === 'directory')
+        .map((item) => ({
+          title: item.path || '/',
+          key: item.path || '.',
+          isLeaf: true,
+        })),
+    [workspaceItems],
+  );
 
   return (
     <div className="project-home">
       <div className="project-actions">
         <div className="page-surface project-action-card">
           <h3>创建项目</h3>
-          <p>从一个新项目开始，把后续需求、开发和测试都收敛到这个项目里。</p>
+          <p>从一个新项目开始，把后续需求、开发和测试都归到这个项目里。</p>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
             创建项目
           </Button>
@@ -77,7 +87,7 @@ function ProjectHome() {
         <div className="page-surface project-action-card">
           <h3>打开项目</h3>
           <p>继续已有项目中的任务流，回到需求确认、开发或测试阶段。</p>
-          <Button icon={<FolderOpenOutlined />} onClick={() => document.getElementById('project-list')?.scrollIntoView({ behavior: 'smooth' })}>
+          <Button icon={<FolderOpenOutlined />} onClick={() => setExistingProjectsOpen(true)}>
             查看已有项目
           </Button>
         </div>
@@ -112,7 +122,7 @@ function ProjectHome() {
                     key="open"
                     type="link"
                     icon={<RightOutlined />}
-                    onClick={() => navigate(`/projects/${project.project_id}`)}
+                    onClick={() => openProject(project.project_id)}
                   >
                     打开
                   </Button>,
@@ -151,6 +161,42 @@ function ProjectHome() {
             </Space.Compact>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="已有项目"
+        open={existingProjectsOpen}
+        onCancel={() => setExistingProjectsOpen(false)}
+        footer={null}
+      >
+        {projects.length === 0 && !loading ? (
+          <Empty description="还没有可打开的项目" />
+        ) : (
+          <List
+            loading={loading}
+            dataSource={projects}
+            renderItem={(project) => (
+              <List.Item
+                actions={[
+                  <Button key="open" type="primary" onClick={() => openProject(project.project_id)}>
+                    打开
+                  </Button>,
+                ]}
+              >
+                <List.Item.Meta
+                  avatar={<FolderOpenOutlined />}
+                  title={project.name}
+                  description={
+                    <Space direction="vertical" size={2}>
+                      <code>{project.project_id}</code>
+                      {project.root_path ? <span>{project.root_path}</span> : <Tag>未绑定目录</Tag>}
+                    </Space>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
       </Modal>
 
       <Modal
