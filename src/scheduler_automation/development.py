@@ -123,7 +123,7 @@ async def propose_changes(workspace: Workspace, instruction: str, paths: list[st
 
     selected_files: list[dict[str, str | int]] = []
     for path in paths:
-        selected_files.append(workspace.read_file(path))
+        selected_files.append(_read_file_for_proposal(workspace, path))
 
     config = get_llm_config()
     if not config["api_key"]:
@@ -173,3 +173,14 @@ def _extract_json(raw: str) -> str:
     if fenced:
         return fenced.group(1).strip()
     return text
+
+
+def _read_file_for_proposal(workspace: Workspace, path: str) -> dict[str, str | int]:
+    try:
+        return workspace.read_file(path)
+    except Exception:
+        return {
+            "path": path,
+            "content": "",
+            "size": 0,
+        }

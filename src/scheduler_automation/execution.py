@@ -59,11 +59,19 @@ async def execute_task(
         raise ValueError("Project workspace is not configured or does not exist.")
 
     selected_paths = request.paths or _select_workspace_files(workspace.root)
+    bootstrapped = False
     if not selected_paths:
-        raise ValueError("No candidate files were found in the project workspace.")
+        selected_paths = _bootstrap_workspace_targets(
+            workspace.root,
+            metadata.title,
+            manager.load_requirement_session(task_id).summary,
+        )
+        bootstrapped = True
 
     instruction = request.instruction.strip() or _build_instruction(metadata.title, manager.load_requirement_session(task_id).summary)
     manager.append_log(task_id, metadata.current_stage, "Execution started")
+    if bootstrapped:
+        manager.append_log(task_id, metadata.current_stage, f"Bootstrap scaffold selected: {', '.join(selected_paths)}")
 
     summary, changes = await proposal_func(instruction, selected_paths, metadata.project_id)
     written: list[str] = []
@@ -123,3 +131,55 @@ def _select_workspace_files(root: Path, limit: int = 8) -> list[str]:
     if len(chosen) < limit:
         chosen.extend(fallback[: limit - len(chosen)])
     return [path.as_posix() for path in chosen]
+
+
+def _bootstrap_workspace_targets(root: Path, title: str, summary: str) -> list[str]:
+    stack = _infer_stack(root, title, summary)
+    if stack == "node":
+        return [
+            "package.json",
+            "src/index.ts",
+            "tests/app.test.ts",
+        ]
+    return [
+        "pyproject.toml",
+        "src/app.py",
+        "tests/test_app.py",
+    ]
+
+
+def _infer_stack(root: Path, title: str, summary: str) -> str:
+    node_markers = {
+        "package.json",
+        "tsconfig.json",
+        "vite.config.ts",
+        "vite.config.js",
+        "next.config.js",
+        "next.config.ts",
+    }
+    python_markers = {
+        "pyproject.toml",
+        "requirements.txt",
+        "pytest.ini",
+    }
+    existing = {path.name for path in root.iterdir()} if root.exists() else set()
+    if existing & node_markers:
+        return "node"
+    if existing & python_markers:
+        return "python"
+
+    text = f"{title}\n{summary}".lower()
+    node_keywords = {
+        "react",
+        "vue",
+        "node",
+        "typescript",
+        "javascript",
+        "frontend",
+        "web",
+        "vite",
+        "next",
+    }
+    if any(keyword in text for keyword in node_keywords):
+        return "node"
+    return "python"

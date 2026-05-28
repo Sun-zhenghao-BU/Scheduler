@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from scheduler_automation.agents.provider import AgentProvider, AgentResult, AgentRole
+from scheduler_automation.project_workspace import load_workspace
 from scheduler_automation.workspace import Workspace
 from scheduler_automation.workflow import WorkflowManager
 
@@ -32,31 +33,61 @@ async def run_agent_workflow(
     provider: AgentProvider,
 ) -> list[AgentResult]:
     metadata, task_dir = manager.get_task(task_id)
-    task_context = _task_context(task_dir)
+    task_context = _task_context(manager, metadata.project_id, task_dir)
 
-    results = await asyncio.gather(
-        *(provider.run(role, metadata.title, task_context) for role in AGENT_ROLES)
-    )
+    results = await asyncio.gather(*(provider.run(role, metadata.title, task_context) for role in AGENT_ROLES))
 
     for result in results:
         if result.status == "completed":
             (task_dir / ROLE_FILES[result.role]).write_text(result.content, encoding="utf-8")
 
+    _write_agent_results(task_dir, results)
+    manager.append_log(task_id, metadata.current_stage, "Agent workflow finished")
+    return list(results)
+
+
+async def run_agent_roles(
+    manager: WorkflowManager,
+    task_id: str,
+    provider: AgentProvider,
+    roles: tuple[AgentRole, ...] | list[AgentRole],
+) -> list[AgentResult]:
+    metadata, task_dir = manager.get_task(task_id)
+    existing = {result.role: result for result in load_agent_results(manager, task_id)}
+    results: list[AgentResult] = []
+
+    for role in roles:
+        task_context = _task_context(manager, metadata.project_id, task_dir)
+        result = await provider.run(role, metadata.title, task_context)
+        if result.status == "completed":
+            (task_dir / ROLE_FILES[result.role]).write_text(result.content, encoding="utf-8")
+        existing[role] = result
+        results.append(result)
+
+    ordered = [existing[role] for role in AGENT_ROLES if role in existing]
+    _write_agent_results(task_dir, ordered)
+    manager.append_log(task_id, metadata.current_stage, f"Agent roles finished: {', '.join(roles)}")
+    return results
+
+
+def _write_agent_results(task_dir: Path, results: list[AgentResult]) -> None:
     (task_dir / "agents.json").write_text(
         json.dumps({"results": [result.to_dict() for result in results]}, indent=2, ensure_ascii=True) + "\n",
         encoding="utf-8",
     )
-    manager.append_log(task_id, metadata.current_stage, "代理工作流已完成")
-    return list(results)
 
 
-def _task_context(task_dir) -> str:
+def _task_context(manager: WorkflowManager, project_id: str, task_dir: Path) -> str:
     parts: list[str] = []
-    for file_name in ("request.md", "spec.md", "implementation.md", "review.md"):
+    for file_name in ("request.md", "spec.md", "implementation.md", "review.md", "fixes.md"):
         path = task_dir / file_name
         if path.exists():
             parts.append(f"## {file_name}\n\n{path.read_text(encoding='utf-8')}")
-    workspace = Workspace(Path(os.environ.get("SCHEDULER_PROJECT_ROOT", "/workspace/project")))
-    if workspace.exists():
-        parts.append(f"## 本地项目只读上下文\n\n{workspace.summary()}")
+    workspace = (
+        load_workspace(manager.root, project_id)
+        if project_id
+        else Workspace(Path(os.environ.get("SCHEDULER_PROJECT_ROOT", "/workspace/project")))
+    )
+    if workspace is not None and workspace.exists():
+        parts.append(f"## Project workspace summary\n\n{workspace.summary()}")
     return "\n\n".join(parts)

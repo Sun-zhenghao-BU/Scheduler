@@ -87,6 +87,22 @@ export interface TaskExecutionResult {
   stage: string;
 }
 
+export interface TaskOrchestrationResult {
+  product_status: string;
+  product_content: string;
+  product_error: string;
+  implementation_summary: string;
+  written: string[];
+  test_command: string;
+  test_exit_code: number;
+  test_output: string;
+  tester_status: string;
+  tester_content: string;
+  tester_error: string;
+  final_stage: string;
+  release_ready: boolean;
+}
+
 export type AgentRole = 'product_manager' | 'developer' | 'tester';
 export type AgentStatus = 'completed' | 'failed';
 

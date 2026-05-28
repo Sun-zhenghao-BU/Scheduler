@@ -27,10 +27,10 @@ import {
   addRequirementMessage,
   advanceTask,
   confirmRequirements,
-  executeTask,
   getAgentResults,
   getRequirements,
   getTask,
+  orchestrateTask,
   runAgentWorkflow,
   updateTaskFile,
 } from '../api';
@@ -40,7 +40,7 @@ import type {
   RequirementSession,
   Stage,
   TaskDetail as TaskDetailModel,
-  TaskExecutionResult,
+  TaskOrchestrationResult,
 } from '../types';
 import { AGENT_LABELS, STAGES, STAGE_COLORS, STAGE_LABELS } from '../types';
 import { getErrorMessage } from '../utils/error';
@@ -76,8 +76,8 @@ function TaskDetail() {
   const [requirementSummary, setRequirementSummary] = useState('');
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
-  const [executionLoading, setExecutionLoading] = useState(false);
-  const [executionResult, setExecutionResult] = useState<TaskExecutionResult | null>(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowResult, setWorkflowResult] = useState<TaskOrchestrationResult | null>(null);
 
   const fetchTask = useCallback(async () => {
     if (!taskId) {
@@ -270,20 +270,20 @@ function TaskDetail() {
     }
   }
 
-  async function handleExecuteTask() {
+  async function handleStartWorkflow() {
     if (!taskId) {
       return;
     }
-    setExecutionLoading(true);
+    setWorkflowLoading(true);
     try {
-      const result = await executeTask(taskId);
-      setExecutionResult(result);
-      message.success('实施流程执行完成');
+      const result = await orchestrateTask(taskId);
+      setWorkflowResult(result);
+      message.success(result.release_ready ? '流程执行完成，已达到发布条件' : '流程执行完成，已进入修复阶段');
       await Promise.all([fetchTask(), fetchAgents()]);
     } catch (error: unknown) {
-      message.error(getErrorMessage(error, '实施流程执行失败'));
+      message.error(getErrorMessage(error, '自动流程执行失败'));
     } finally {
-      setExecutionLoading(false);
+      setWorkflowLoading(false);
     }
   }
 
@@ -330,9 +330,7 @@ function TaskDetail() {
           <Descriptions.Item label="任务 ID">
             <code style={{ fontSize: 12 }}>{detail.task_id}</code>
           </Descriptions.Item>
-          <Descriptions.Item label="所属项目">
-            {projectId || detail.project_id || '未绑定'}
-          </Descriptions.Item>
+          <Descriptions.Item label="所属项目">{projectId || detail.project_id || '未绑定'}</Descriptions.Item>
           <Descriptions.Item label="当前阶段">
             <Tag color={STAGE_COLORS[detail.current_stage as Stage]}>
               {STAGE_LABELS[detail.current_stage as Stage]}
@@ -343,12 +341,8 @@ function TaskDetail() {
               {requirementsConfirmed ? '已确认' : '待确认'}
             </Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="创建时间">
-            {new Date(detail.created_at).toLocaleString('zh-CN')}
-          </Descriptions.Item>
-          <Descriptions.Item label="更新时间">
-            {new Date(detail.updated_at).toLocaleString('zh-CN')}
-          </Descriptions.Item>
+          <Descriptions.Item label="创建时间">{new Date(detail.created_at).toLocaleString('zh-CN')}</Descriptions.Item>
+          <Descriptions.Item label="更新时间">{new Date(detail.updated_at).toLocaleString('zh-CN')}</Descriptions.Item>
         </Descriptions>
       </div>
 
@@ -356,17 +350,12 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>需求确认</h3>
-            <p>先把需求摘要锁定，后续实施将以这份确认内容为准。</p>
+            <p>先把需求摘要锁定，后续产品方案、开发和测试都会以这份确认内容为准。</p>
           </div>
           <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
-        {nextStage === 'implement' && !requirementsConfirmed && (
-          <Alert
-            type="warning"
-            showIcon
-            message="当前任务还不能进入实施阶段，请先确认需求。"
-            style={{ marginBottom: 12 }}
-          />
+        {!requirementsConfirmed && (
+          <Alert type="warning" showIcon message="当前任务还不能进入自动流程，请先确认需求。" style={{ marginBottom: 12 }} />
         )}
         <div className="requirement-thread">
           {requirements?.messages.length ? (
@@ -388,7 +377,7 @@ function TaskDetail() {
               value={requirementMessage}
               onChange={(event) => setRequirementMessage(event.target.value)}
               rows={3}
-              placeholder="补充约束、验收标准或额外上下文。"
+              placeholder="补充边界条件、验收标准或额外上下文。"
             />
             <Space style={{ marginTop: 8 }}>
               <Button icon={<SendOutlined />} loading={requirementsLoading} onClick={handleAddRequirementMessage}>
@@ -423,17 +412,17 @@ function TaskDetail() {
       <div className="page-surface agents-panel">
         <div className="section-heading">
           <div>
-            <h3>开始实施</h3>
-            <p>这是主流程。系统会选择项目文件、生成改动、写回代码并执行测试。</p>
+            <h3>自动流程</h3>
+            <p>点击后会串行执行：产品经理方案细化、开发实施、测试评审，并根据结果进入修复或发布阶段。</p>
           </div>
           <Button
             type="primary"
             icon={<PlayCircleOutlined />}
-            loading={executionLoading}
+            loading={workflowLoading}
             disabled={!requirementsConfirmed}
-            onClick={handleExecuteTask}
+            onClick={handleStartWorkflow}
           >
-            开始实施
+            开始自动流程
           </Button>
         </div>
         {!requirementsConfirmed && (
@@ -441,35 +430,47 @@ function TaskDetail() {
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="请先确认需求摘要，确认后才能执行实施流程。"
+            message="请先确认需求摘要，确认后才能执行产品经理、开发、测试的串行流程。"
           />
         )}
-        {executionResult && (
-          <Card size="small" title="最近一次实施结果">
+        {workflowResult && (
+          <Card size="small" title="最近一次流程结果">
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
               <div>
-                <strong>结果摘要</strong>
-                <pre>{executionResult.summary}</pre>
+                <strong>产品经理输出</strong>
+                <pre>{workflowResult.product_error || workflowResult.product_content || '无'}</pre>
               </div>
               <div>
-                <strong>选中文件</strong>
-                <pre>{executionResult.selected_paths.join('\n') || '无'}</pre>
+                <strong>开发结果摘要</strong>
+                <pre>{workflowResult.implementation_summary}</pre>
               </div>
               <div>
                 <strong>写回文件</strong>
-                <pre>{executionResult.written.join('\n') || '无'}</pre>
+                <pre>{workflowResult.written.join('\n') || '无'}</pre>
               </div>
               <div>
                 <strong>测试命令</strong>
-                <pre>{executionResult.test_command || '无'}</pre>
+                <pre>{workflowResult.test_command || '无'}</pre>
               </div>
               <div>
                 <strong>测试退出码</strong>
-                <pre>{String(executionResult.test_exit_code)}</pre>
+                <pre>{String(workflowResult.test_exit_code)}</pre>
               </div>
               <div>
                 <strong>测试输出</strong>
-                <pre>{executionResult.test_output || '无输出'}</pre>
+                <pre>{workflowResult.test_output || '无输出'}</pre>
+              </div>
+              <div>
+                <strong>测试代理结论</strong>
+                <pre>{workflowResult.tester_error || workflowResult.tester_content || '无'}</pre>
+              </div>
+              <div>
+                <strong>最终阶段</strong>
+                <pre>{STAGE_LABELS[workflowResult.final_stage as Stage] || workflowResult.final_stage}</pre>
+              </div>
+              <div>
+                <strong>发布判定</strong>
+                <pre>{workflowResult.release_ready ? '达到发布条件' : '未达到发布条件，进入修复'}</pre>
               </div>
             </Space>
           </Card>
@@ -480,7 +481,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>辅助代理分析</h3>
-            <p>这部分只产出辅助文档，不会真正修改项目代码。</p>
+            <p>这部分仍然保留给手动参考使用，不参与自动串行流程。</p>
           </div>
           <Button type="default" icon={<TeamOutlined />} loading={agentsLoading} onClick={handleRunAgents}>
             运行辅助代理

@@ -10,6 +10,7 @@ import type {
   Task,
   TaskDetail,
   TaskExecutionResult,
+  TaskOrchestrationResult,
   TestCommandResult,
   WorkspaceFile,
   WorkspaceInfo,
@@ -127,6 +128,14 @@ export async function executeTask(
   payload: { instruction?: string; paths?: string[]; test_command?: string; apply_changes?: boolean } = {},
 ): Promise<TaskExecutionResult> {
   const { data } = await api.post<TaskExecutionResult>(`/tasks/${taskId}/execute`, payload);
+  return data;
+}
+
+export async function orchestrateTask(
+  taskId: string,
+  payload: { instruction?: string; paths?: string[]; test_command?: string; apply_changes?: boolean } = {},
+): Promise<TaskOrchestrationResult> {
+  const { data } = await api.post<TaskOrchestrationResult>(`/tasks/${taskId}/orchestrate`, payload);
   return data;
 }
 
