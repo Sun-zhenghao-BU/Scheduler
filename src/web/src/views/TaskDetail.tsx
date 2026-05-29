@@ -337,6 +337,7 @@ function TaskDetail() {
               {workflowState.status || 'idle'}
             </Tag>
           </Descriptions.Item>
+          <Descriptions.Item label="当前步骤">{workflowState.active_step || '无'}</Descriptions.Item>
           <Descriptions.Item label="建议动作">{workflowState.recommended_action || '无'}</Descriptions.Item>
           <Descriptions.Item label="当前轮次">{workflowState.current_round}</Descriptions.Item>
           <Descriptions.Item label="最大轮次">{workflowState.max_rounds}</Descriptions.Item>
@@ -443,7 +444,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>自动流程</h3>
-            <p>流程在后台执行。页面会自动轮询状态，不再同步卡住等待。</p>
+            <p>流程在后台执行。页面会自动轮询状态，日志和任务文件会按阶段更新。</p>
           </div>
           <Button
             type="primary"
@@ -461,8 +462,11 @@ function TaskDetail() {
             showIcon
             style={{ marginBottom: 12 }}
             message="自动流程正在后台执行。"
-            description="页面会每 2 秒刷新一次状态，你可以继续查看日志和生成的文件。"
+            description={workflowState.step_message || '页面会每 2 秒刷新一次状态。'}
           />
+        )}
+        {workflowState.step_message && workflowState.status !== 'queued' && workflowState.status !== 'running' && (
+          <Alert type="success" showIcon style={{ marginBottom: 12 }} message={workflowState.step_message} />
         )}
         {workflowState.requires_human_review && (
           <Alert

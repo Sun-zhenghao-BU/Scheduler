@@ -250,6 +250,8 @@ def _start_orchestration_background(task_id: str, req: ExecuteTaskRequest) -> bo
     state = manager.load_workflow_state(task_id)
     state.status = "queued"
     state.current_stage = metadata.current_stage
+    state.active_step = "queued"
+    state.step_message = "任务已进入后台队列，等待开始执行。"
     state.release_ready = False
     state.requires_human_review = False
     state.last_error = ""

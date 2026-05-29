@@ -50,6 +50,8 @@ export interface WorkflowState {
   current_round: number;
   max_rounds: number;
   current_stage: string;
+  active_step: string;
+  step_message: string;
   release_ready: boolean;
   requires_human_review: boolean;
   last_error: string;

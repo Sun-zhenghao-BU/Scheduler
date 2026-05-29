@@ -71,6 +71,8 @@ class WorkflowState:
     current_round: int = 0
     max_rounds: int = 0
     current_stage: str = "intake"
+    active_step: str = ""
+    step_message: str = ""
     release_ready: bool = False
     requires_human_review: bool = False
     last_error: str = ""
@@ -249,6 +251,8 @@ class WorkflowManager:
         state.current_round = 0
         state.max_rounds = 0
         state.current_stage = metadata.current_stage
+        state.active_step = ""
+        state.step_message = ""
         state.release_ready = False
         state.requires_human_review = False
         state.last_error = ""
@@ -285,6 +289,8 @@ class WorkflowManager:
         state.current_round = 0
         state.max_rounds = 0
         state.current_stage = "intake"
+        state.active_step = ""
+        state.step_message = ""
         state.release_ready = False
         state.requires_human_review = False
         state.last_error = ""
@@ -329,6 +335,8 @@ class WorkflowManager:
             current_round=data.get("current_round", 0),
             max_rounds=data.get("max_rounds", 0),
             current_stage=data.get("current_stage", "intake"),
+            active_step=data.get("active_step", ""),
+            step_message=data.get("step_message", ""),
             release_ready=data.get("release_ready", False),
             requires_human_review=data.get("requires_human_review", False),
             last_error=data.get("last_error", ""),
@@ -467,6 +475,10 @@ class WorkflowManager:
             ]
         )
         self._append_section(release_path, "发布结论", body)
+
+    def note_file_progress(self, task_id: str, file_name: str, heading: str, body: str) -> None:
+        _, task_dir = self.get_task(task_id)
+        self._append_section(task_dir / file_name, heading, body)
 
     def _task_files(self, task_dir: Path) -> Iterable[Path]:
         return sorted(path for path in task_dir.iterdir() if path.is_file())
