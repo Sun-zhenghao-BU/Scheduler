@@ -104,6 +104,7 @@ export interface TaskOrchestrationResult {
   tester_error: string;
   final_stage: string;
   release_ready: boolean;
+  fix_rounds: number;
 }
 
 export type AgentRole = 'product_manager' | 'developer' | 'tester';

@@ -81,7 +81,6 @@ class WorkflowManager:
         for name, content in files.items():
             (task_dir / name).write_text(content, encoding="utf-8")
         self._write_requirement_session(task_dir, self._initial_requirement_session(request))
-
         return metadata
 
     def list_tasks(self, project_id: str | None = None) -> list[TaskMetadata]:
@@ -90,10 +89,11 @@ class WorkflowManager:
             if not task_dir.is_dir():
                 continue
             metadata_file = task_dir / "metadata.json"
-            if metadata_file.exists():
-                metadata = self._read_metadata(metadata_file)
-                if project_id is None or metadata.project_id == project_id:
-                    results.append(metadata)
+            if not metadata_file.exists():
+                continue
+            metadata = self._read_metadata(metadata_file)
+            if project_id is None or metadata.project_id == project_id:
+                results.append(metadata)
         return results
 
     def get_task(self, task_id: str) -> tuple[TaskMetadata, Path]:
@@ -202,7 +202,7 @@ class WorkflowManager:
         test_exit_code: int,
         test_output: str,
     ) -> None:
-        metadata, task_dir = self.get_task(task_id)
+        _, task_dir = self.get_task(task_id)
         implementation_path = task_dir / "implementation.md"
         review_path = task_dir / "review.md"
         self._append_section(
@@ -232,8 +232,49 @@ class WorkflowManager:
                 ]
             ),
         )
-        metadata.updated_at = utc_timestamp()
-        self._write_metadata(task_dir, metadata)
+
+    def write_fix_summary(
+        self,
+        task_id: str,
+        round_number: int,
+        test_output: str,
+        tester_content: str,
+    ) -> None:
+        _, task_dir = self.get_task(task_id)
+        fixes_path = task_dir / "fixes.md"
+        body = "\n".join(
+            [
+                f"Round: {round_number}",
+                "",
+                "Tester assessment:",
+                tester_content.strip() or "(no tester output)",
+                "",
+                "Failing test output:",
+                test_output.strip() or "(no test output)",
+            ]
+        )
+        self._append_section(fixes_path, f"Fix Round {round_number}", body)
+
+    def write_release_summary(
+        self,
+        task_id: str,
+        summary: str,
+        test_command: str,
+        test_output: str,
+    ) -> None:
+        _, task_dir = self.get_task(task_id)
+        release_path = task_dir / "release.md"
+        body = "\n".join(
+            [
+                summary.strip() or "Workflow marked this task ready for release.",
+                "",
+                f"Final test command: {test_command or '(none)'}",
+                "",
+                "Final verification output:",
+                test_output.strip() or "(no output)",
+            ]
+        )
+        self._append_section(release_path, "Release Decision", body)
 
     def _task_files(self, task_dir: Path) -> Iterable[Path]:
         return sorted(path for path in task_dir.iterdir() if path.is_file())
@@ -249,10 +290,7 @@ class WorkflowManager:
 
     def _write_metadata(self, task_dir: Path, metadata: TaskMetadata) -> None:
         metadata_file = task_dir / "metadata.json"
-        metadata_file.write_text(
-            json.dumps(asdict(metadata), indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
+        metadata_file.write_text(json.dumps(asdict(metadata), indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
     def _initial_requirement_session(self, request: str) -> RequirementSession:
         messages: list[RequirementMessage] = []
@@ -276,22 +314,18 @@ class WorkflowManager:
         )
 
     def _request_template(self, title: str, request: str) -> str:
-        body = request.strip() or "- 请填写用户的原始需求。\n"
-        return (
-            f"# 需求\n\n"
-            f"## 标题\n\n{title.strip()}\n\n"
-            f"## 原始输入\n\n{body}\n"
-        )
+        body = request.strip() or "- 请补充原始需求。\n"
+        return f"# 需求\n\n## 标题\n\n{title.strip()}\n\n## 原始输入\n\n{body}\n"
 
     def _spec_template(self, title: str) -> str:
         return (
-            f"# 产品规划\n\n"
+            "# 产品规划\n\n"
             f"## 问题\n\n{title.strip()}\n\n"
-            f"## 范围\n\n- 定义本次要完成的内容。\n\n"
-            f"## 不做什么\n\n- 明确本次不包含的内容。\n\n"
-            f"## 验收标准\n\n- 补充可验证的验收条件。\n\n"
-            f"## 架构说明\n\n- 记录关键技术决策。\n\n"
-            f"## 风险\n\n- 记录技术和交付风险。\n"
+            "## 范围\n\n- 定义本次要完成的内容。\n\n"
+            "## 不做什么\n\n- 明确本次不包含的内容。\n\n"
+            "## 验收标准\n\n- 补充可验证的验收条件。\n\n"
+            "## 架构说明\n\n- 记录关键技术决策。\n\n"
+            "## 风险\n\n- 记录技术和交付风险。\n"
         )
 
     def _confirmed_spec_template(self, title: str, summary: str) -> str:
@@ -316,9 +350,9 @@ class WorkflowManager:
 
     def _review_template(self) -> str:
         return (
-            "# 测试方案\n\n"
-            "## 自测\n\n- 验证正确性、回归风险和遗漏点。\n\n"
-            "## 评审发现\n\n- 记录问题、风险和清理项。\n"
+            "# 测试评审\n\n"
+            "## 自测范围\n\n- 验证正确性、回归风险和遗漏点。\n\n"
+            "## 评审发现\n\n- 记录问题、风险和待处理项。\n"
         )
 
     def _fixes_template(self) -> str:
@@ -331,7 +365,7 @@ class WorkflowManager:
     def _release_template(self) -> str:
         return (
             "# 发布记录\n\n"
-            "## 发布检查\n\n- 提交变更。\n- 推送分支。\n- 部署。\n\n"
+            "## 发布检查\n\n- 提交变更\n- 推送分支\n- 部署\n\n"
             "## 说明\n\n- 补充发布摘要。\n"
         )
 

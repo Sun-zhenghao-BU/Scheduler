@@ -121,6 +121,7 @@ class OrchestrateTaskResponse(BaseModel):
     tester_error: str = ""
     final_stage: str
     release_ready: bool
+    fix_rounds: int
 
 
 @router.get("/", response_model=list[TaskResponse])
@@ -367,4 +368,5 @@ async def orchestrate_task(task_id: str, req: ExecuteTaskRequest):
         tester_error=result.tester_result.error,
         final_stage=result.final_stage,
         release_ready=result.release_ready,
+        fix_rounds=result.fix_rounds,
     )

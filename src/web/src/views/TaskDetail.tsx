@@ -278,7 +278,11 @@ function TaskDetail() {
     try {
       const result = await orchestrateTask(taskId);
       setWorkflowResult(result);
-      message.success(result.release_ready ? '流程执行完成，已达到发布条件' : '流程执行完成，已进入修复阶段');
+      message.success(
+        result.release_ready
+          ? '流程执行完成，已达到发布条件'
+          : `流程执行完成，已进入修复阶段，自动修复轮次：${result.fix_rounds}`,
+      );
       await Promise.all([fetchTask(), fetchAgents()]);
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '自动流程执行失败'));
@@ -350,7 +354,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>需求确认</h3>
-            <p>先把需求摘要锁定，后续产品规划、实施方案和测试评审都会以这份确认内容为准。</p>
+            <p>先把需求摘要锁定，后续产品规划、实施方案、测试评审和修复回环都会以这份确认内容为准。</p>
           </div>
           <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
@@ -413,7 +417,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>自动流程</h3>
-            <p>点击后会按顺序执行：生成产品规划、生成实施方案、实际改代码、测试评审，再决定进入修复还是发布。</p>
+            <p>点击后会按顺序执行：生成产品规划、生成实施方案、实际改代码、测试评审；如果失败，会自动进入修复并重新开发、回测。</p>
           </div>
           <Button
             type="primary"
@@ -469,12 +473,16 @@ function TaskDetail() {
                 <pre>{workflowResult.tester_error || workflowResult.tester_content || '无'}</pre>
               </div>
               <div>
+                <strong>自动修复轮次</strong>
+                <pre>{String(workflowResult.fix_rounds)}</pre>
+              </div>
+              <div>
                 <strong>最终阶段</strong>
                 <pre>{STAGE_LABELS[workflowResult.final_stage as Stage] || workflowResult.final_stage}</pre>
               </div>
               <div>
                 <strong>发布判定</strong>
-                <pre>{workflowResult.release_ready ? '达到发布条件' : '未达到发布条件，进入修复'}</pre>
+                <pre>{workflowResult.release_ready ? '达到发布条件' : '未达到发布条件，仍需修复'}</pre>
               </div>
             </Space>
           </Card>
