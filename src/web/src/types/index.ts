@@ -153,6 +153,8 @@ export interface RequirementMessage {
 export interface RequirementSession {
   status: 'drafting' | 'confirmed';
   summary: string;
+  next_action: 'ask' | 'confirm' | string;
+  suggested_summary: string;
   messages: RequirementMessage[];
 }
 

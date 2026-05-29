@@ -30,6 +30,8 @@ class WorkflowManagerTests(unittest.TestCase):
             self.assertEqual(len(session.messages), 1)
             self.assertEqual(session.messages[0].role, "user")
             self.assertEqual(session.messages[0].content, "Users need a PM clarification chat.")
+            self.assertEqual(session.next_action, "ask")
+            self.assertEqual(session.suggested_summary, "")
 
     def test_confirm_requirements_updates_spec_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -50,6 +52,8 @@ class WorkflowManagerTests(unittest.TestCase):
             session = manager.load_requirement_session(metadata.task_id)
             self.assertEqual(session.status, "confirmed")
             self.assertIn("Build a PM-led requirement confirmation flow", session.summary)
+            self.assertEqual(session.next_action, "confirm")
+            self.assertIn("Build a PM-led requirement confirmation flow", session.suggested_summary)
             state = manager.load_workflow_state(metadata.task_id)
             self.assertEqual(state.status, "idle")
             self.assertEqual(state.current_round, 0)
@@ -69,6 +73,8 @@ class WorkflowManagerTests(unittest.TestCase):
             self.assertEqual(reopened.requirement_confirmed_at, "")
             session = manager.load_requirement_session(metadata.task_id)
             self.assertEqual(session.status, "drafting")
+            self.assertEqual(session.next_action, "ask")
+            self.assertEqual(session.suggested_summary, "")
             state = manager.load_workflow_state(metadata.task_id)
             self.assertEqual(state.current_stage, "intake")
             self.assertFalse(state.requires_human_review)

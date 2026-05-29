@@ -83,28 +83,22 @@ function TaskDetail() {
   const [workflowResult, setWorkflowResult] = useState<TaskOrchestrationResult | null>(null);
 
   const fetchTask = useCallback(async () => {
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
     const data = await getTask(taskId);
     setDetail(data);
     return data;
   }, [taskId]);
 
   const fetchRequirements = useCallback(async () => {
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
     const data = await getRequirements(taskId);
     setRequirements(data);
-    setRequirementSummary(data.summary);
+    setRequirementSummary(data.summary || data.suggested_summary || '');
     return data;
   }, [taskId]);
 
   const fetchAgents = useCallback(async () => {
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
     try {
       const data = await getAgentResults(taskId);
       setAgents(data);
@@ -114,15 +108,11 @@ function TaskDetail() {
   }, [taskId]);
 
   useEffect(() => {
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
     let cancelled = false;
     setLoading(true);
     Promise.allSettled([fetchTask(), fetchRequirements(), fetchAgents()]).then((results) => {
-      if (cancelled) {
-        return;
-      }
+      if (cancelled) return;
       if (results[0].status === 'rejected') {
         message.error('任务加载失败');
       }
@@ -142,9 +132,7 @@ function TaskDetail() {
   const requirementsConfirmed = detail?.requirement_status === 'confirmed';
 
   async function handleSaveFile() {
-    if (!taskId || !editingFile) {
-      return;
-    }
+    if (!taskId || !editingFile) return;
     try {
       await updateTaskFile(taskId, editingFile, editContent);
       message.success('文件已保存');
@@ -207,9 +195,7 @@ function TaskDetail() {
   );
 
   async function handleAdvance() {
-    if (!detail || !taskId || !nextStage) {
-      return;
-    }
+    if (!detail || !taskId || !nextStage) return;
     if (nextStage === 'implement' && !requirementsConfirmed) {
       message.warning('请先确认需求，再进入实施阶段');
       return;
@@ -224,14 +210,15 @@ function TaskDetail() {
   }
 
   async function handleAddRequirementMessage() {
-    if (!taskId || !requirementMessage.trim()) {
-      return;
-    }
+    if (!taskId || !requirementMessage.trim()) return;
     setRequirementsLoading(true);
     try {
       const updated = await addRequirementMessage(taskId, 'user', requirementMessage.trim());
       setRequirements(updated);
       setRequirementMessage('');
+      if (updated.summary) {
+        setRequirementSummary(updated.summary);
+      }
       message.success('需求补充已记录');
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '需求补充保存失败'));
@@ -241,14 +228,17 @@ function TaskDetail() {
   }
 
   async function handleAskProductManager() {
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
     setRequirementsLoading(true);
     try {
       const updated = await generateRequirementQuestion(taskId);
       setRequirements(updated);
-      message.success('产品经理已给出下一步问题');
+      if (!updated.summary && updated.suggested_summary) {
+        setRequirementSummary(updated.suggested_summary);
+      }
+      message.success(
+        updated.next_action === 'confirm' ? '产品经理判断信息已足够，可确认摘要' : '产品经理已给出下一步问题',
+      );
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '生成产品经理问题失败'));
     } finally {
@@ -274,9 +264,7 @@ function TaskDetail() {
   }
 
   async function handleReopenRequirements() {
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
     setRequirementsLoading(true);
     try {
       await reopenRequirements(taskId);
@@ -290,9 +278,7 @@ function TaskDetail() {
   }
 
   async function handleRunAgents() {
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
     setAgentsLoading(true);
     try {
       const results = await runAgentWorkflow(taskId);
@@ -307,9 +293,7 @@ function TaskDetail() {
   }
 
   async function handleStartWorkflow() {
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
     setWorkflowLoading(true);
     try {
       const result = await orchestrateTask(taskId);
@@ -325,6 +309,12 @@ function TaskDetail() {
     } finally {
       setWorkflowLoading(false);
     }
+  }
+
+  function adoptSuggestedSummary() {
+    if (!requirements?.suggested_summary) return;
+    setRequirementSummary(requirements.suggested_summary);
+    message.success('已填入建议摘要');
   }
 
   if (!detail) {
@@ -356,11 +346,7 @@ function TaskDetail() {
           extra={
             nextStage ? (
               <Popconfirm title={`确认推进到 ${STAGE_LABELS[nextStage as Stage]}？`} onConfirm={handleAdvance}>
-                <Button
-                  type="default"
-                  icon={<StepForwardOutlined />}
-                  disabled={nextStage === 'implement' && !requirementsConfirmed}
-                >
+                <Button type="default" icon={<StepForwardOutlined />} disabled={nextStage === 'implement' && !requirementsConfirmed}>
                   推进到 {STAGE_LABELS[nextStage as Stage]}
                 </Button>
               </Popconfirm>
@@ -374,14 +360,10 @@ function TaskDetail() {
           </Descriptions.Item>
           <Descriptions.Item label="所属项目">{projectId || detail.project_id || '未绑定'}</Descriptions.Item>
           <Descriptions.Item label="当前阶段">
-            <Tag color={STAGE_COLORS[detail.current_stage as Stage]}>
-              {STAGE_LABELS[detail.current_stage as Stage]}
-            </Tag>
+            <Tag color={STAGE_COLORS[detail.current_stage as Stage]}>{STAGE_LABELS[detail.current_stage as Stage]}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="需求状态">
-            <Tag color={requirementsConfirmed ? 'green' : 'orange'}>
-              {requirementsConfirmed ? '已确认' : '待确认'}
-            </Tag>
+            <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已确认' : '待确认'}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="工作流状态">
             <Tag color={workflowState.release_ready ? 'green' : workflowState.requires_human_review ? 'red' : 'blue'}>
@@ -400,12 +382,26 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>需求确认</h3>
-            <p>先让产品经理追问关键问题，再把需求摘要锁定。后续产品规划、实施方案、测试评审和修复回环都会以这份确认内容为准。</p>
+            <p>先由产品经理判断下一步是继续追问还是可以确认，再把需求摘要锁定。</p>
           </div>
           <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
         {!requirementsConfirmed && (
           <Alert type="warning" showIcon message="当前任务还不能进入自动流程，请先完成需求确认。" style={{ marginBottom: 12 }} />
+        )}
+        {!requirementsConfirmed && requirements?.next_action === 'confirm' && requirements.suggested_summary && (
+          <Alert
+            type="success"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="产品经理判断信息已足够，可以确认摘要"
+            description={requirements.suggested_summary}
+            action={
+              <Button size="small" icon={<CheckCircleOutlined />} onClick={adoptSuggestedSummary}>
+                采用建议摘要
+              </Button>
+            }
+          />
         )}
         <div className="requirement-thread">
           {requirements?.messages.length ? (
@@ -426,8 +422,11 @@ function TaskDetail() {
             <div className="requirement-inputs">
               <Space>
                 <Button loading={requirementsLoading} onClick={handleAskProductManager}>
-                  产品经理提问
+                  产品经理判断下一步
                 </Button>
+                <Tag color={requirements?.next_action === 'confirm' ? 'green' : 'blue'}>
+                  {requirements?.next_action === 'confirm' ? '可确认摘要' : '继续追问'}
+                </Tag>
               </Space>
             </div>
             <div className="requirement-inputs">
@@ -455,12 +454,7 @@ function TaskDetail() {
           />
           {!requirementsConfirmed && (
             <Space style={{ marginTop: 8 }}>
-              <Button
-                type="primary"
-                icon={<CheckCircleOutlined />}
-                loading={requirementsLoading}
-                onClick={handleConfirmRequirements}
-              >
+              <Button type="primary" icon={<CheckCircleOutlined />} loading={requirementsLoading} onClick={handleConfirmRequirements}>
                 确认需求
               </Button>
             </Space>
@@ -474,23 +468,12 @@ function TaskDetail() {
             <h3>自动流程</h3>
             <p>点击后会按顺序执行：生成产品规划、生成实施方案、实际改代码、测试评审；如果失败，会自动进入修复并重新开发、回测。</p>
           </div>
-          <Button
-            type="primary"
-            icon={<PlayCircleOutlined />}
-            loading={workflowLoading}
-            disabled={!requirementsConfirmed}
-            onClick={handleStartWorkflow}
-          >
+          <Button type="primary" icon={<PlayCircleOutlined />} loading={workflowLoading} disabled={!requirementsConfirmed} onClick={handleStartWorkflow}>
             开始自动流程
           </Button>
         </div>
         {!requirementsConfirmed && (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="请先完成需求确认，确认后才能执行完整的产品、开发、测试串行流程。"
-          />
+          <Alert type="info" showIcon style={{ marginBottom: 12 }} message="请先完成需求确认，确认后才能执行完整的产品、开发、测试串行流程。" />
         )}
         {workflowState.requires_human_review && (
           <Alert

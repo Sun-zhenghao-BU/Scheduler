@@ -11,7 +11,7 @@ from scheduler_automation.development import propose_changes, run_test_command
 from scheduler_automation.execution import ExecutionRequest, execute_task
 from scheduler_automation.orchestration import run_task_orchestration
 from scheduler_automation.project_workspace import load_workspace
-from scheduler_automation.requirements import generate_requirement_question, generate_requirement_question_with_llm
+from scheduler_automation.requirements import generate_requirement_guidance, generate_requirement_guidance_with_llm
 from scheduler_automation.workflow import STAGES, WorkflowManager
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -86,6 +86,8 @@ class RequirementMessageResponse(BaseModel):
 class RequirementSessionResponse(BaseModel):
     status: str
     summary: str
+    next_action: str
+    suggested_summary: str
     messages: list[RequirementMessageResponse]
 
 
@@ -193,6 +195,8 @@ def get_requirements(task_id: str):
     return RequirementSessionResponse(
         status=session.status,
         summary=session.summary,
+        next_action=session.next_action,
+        suggested_summary=session.suggested_summary,
         messages=[RequirementMessageResponse(**asdict(message)) for message in session.messages],
     )
 
@@ -209,6 +213,8 @@ def add_requirement_message(task_id: str, req: RequirementMessageRequest):
     return RequirementSessionResponse(
         status=session.status,
         summary=session.summary,
+        next_action=session.next_action,
+        suggested_summary=session.suggested_summary,
         messages=[RequirementMessageResponse(**asdict(message)) for message in session.messages],
     )
 
@@ -217,7 +223,7 @@ def add_requirement_message(task_id: str, req: RequirementMessageRequest):
 async def add_product_manager_question(task_id: str):
     manager = get_manager()
     try:
-        session = await generate_requirement_question(manager, task_id, generate_requirement_question_with_llm)
+        session = await generate_requirement_guidance(manager, task_id, generate_requirement_guidance_with_llm)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     except ValueError as exc:
@@ -225,6 +231,8 @@ async def add_product_manager_question(task_id: str):
     return RequirementSessionResponse(
         status=session.status,
         summary=session.summary,
+        next_action=session.next_action,
+        suggested_summary=session.suggested_summary,
         messages=[RequirementMessageResponse(**asdict(message)) for message in session.messages],
     )
 

@@ -44,6 +44,8 @@ class RequirementSession:
     status: str
     summary: str
     messages: list[RequirementMessage]
+    next_action: str = "ask"
+    suggested_summary: str = ""
 
 
 @dataclass
@@ -161,7 +163,7 @@ class WorkflowManager:
         _, task_dir = self.get_task(task_id)
         session_path = task_dir / "requirements.json"
         if not session_path.exists():
-            session = RequirementSession(status="drafting", summary="", messages=[])
+            session = RequirementSession(status="drafting", summary="", messages=[], next_action="ask", suggested_summary="")
             self._write_requirement_session(task_dir, session)
             return session
         data = json.loads(session_path.read_text(encoding="utf-8"))
@@ -176,6 +178,8 @@ class WorkflowManager:
                 )
                 for item in data.get("messages", [])
             ],
+            next_action=data.get("next_action", "ask"),
+            suggested_summary=data.get("suggested_summary", ""),
         )
 
     def append_requirement_message(self, task_id: str, role: str, content: str) -> RequirementSession:
@@ -185,6 +189,26 @@ class WorkflowManager:
         session = self.load_requirement_session(task_id)
         session.messages.append(RequirementMessage(role=role, content=content.strip(), created_at=utc_timestamp()))
         session.status = metadata.requirement_status
+        if role == "user":
+            session.next_action = "ask"
+            session.suggested_summary = ""
+        self._write_requirement_session(task_dir, session)
+        metadata.updated_at = utc_timestamp()
+        self._write_metadata(task_dir, metadata)
+        return session
+
+    def update_requirement_guidance(
+        self,
+        task_id: str,
+        *,
+        next_action: str,
+        suggested_summary: str = "",
+    ) -> RequirementSession:
+        metadata, task_dir = self.get_task(task_id)
+        session = self.load_requirement_session(task_id)
+        session.status = metadata.requirement_status
+        session.next_action = next_action
+        session.suggested_summary = suggested_summary.strip()
         self._write_requirement_session(task_dir, session)
         metadata.updated_at = utc_timestamp()
         self._write_metadata(task_dir, metadata)
@@ -203,8 +227,11 @@ class WorkflowManager:
         session = self.load_requirement_session(task_id)
         session.status = "confirmed"
         session.summary = summary.strip()
+        session.next_action = "confirm"
+        session.suggested_summary = summary.strip()
         self._write_requirement_session(task_dir, session)
         (task_dir / "spec.md").write_text(self._confirmed_spec_template(metadata.title, summary.strip()), encoding="utf-8")
+
         state = self.load_workflow_state(task_id)
         state.status = "idle"
         state.current_round = 0
@@ -234,6 +261,8 @@ class WorkflowManager:
 
         session = self.load_requirement_session(task_id)
         session.status = "drafting"
+        session.next_action = "ask"
+        session.suggested_summary = ""
         self._write_requirement_session(task_dir, session)
 
         state = self.load_workflow_state(task_id)
@@ -437,7 +466,7 @@ class WorkflowManager:
         messages: list[RequirementMessage] = []
         if request.strip():
             messages.append(RequirementMessage(role="user", content=request.strip(), created_at=utc_timestamp()))
-        return RequirementSession(status="drafting", summary="", messages=messages)
+        return RequirementSession(status="drafting", summary="", messages=messages, next_action="ask", suggested_summary="")
 
     def _write_requirement_session(self, task_dir: Path, session: RequirementSession) -> None:
         (task_dir / "requirements.json").write_text(
@@ -445,6 +474,8 @@ class WorkflowManager:
                 {
                     "status": session.status,
                     "summary": session.summary,
+                    "next_action": session.next_action,
+                    "suggested_summary": session.suggested_summary,
                     "messages": [asdict(message) for message in session.messages],
                 },
                 indent=2,
