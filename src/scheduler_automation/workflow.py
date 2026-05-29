@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
@@ -46,6 +46,32 @@ class RequirementSession:
     messages: list[RequirementMessage]
 
 
+@dataclass
+class WorkflowIssue:
+    title: str
+    severity: str = "medium"
+    blocking: bool = True
+    source: str = "tester"
+
+
+@dataclass
+class WorkflowState:
+    status: str = "idle"
+    current_round: int = 0
+    max_rounds: int = 0
+    current_stage: str = "intake"
+    release_ready: bool = False
+    requires_human_review: bool = False
+    last_error: str = ""
+    last_test_exit_code: int = 0
+    last_test_command: str = ""
+    last_test_output: str = ""
+    tester_summary: str = ""
+    recommended_action: str = ""
+    updated_at: str = ""
+    issues: list[WorkflowIssue] = field(default_factory=list)
+
+
 class WorkflowManager:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -81,6 +107,7 @@ class WorkflowManager:
         for name, content in files.items():
             (task_dir / name).write_text(content, encoding="utf-8")
         self._write_requirement_session(task_dir, self._initial_requirement_session(request))
+        self.save_workflow_state(task_id, WorkflowState(updated_at=now))
         return metadata
 
     def list_tasks(self, project_id: str | None = None) -> list[TaskMetadata]:
@@ -113,6 +140,10 @@ class WorkflowManager:
         metadata.updated_at = utc_timestamp()
         self._write_metadata(task_dir, metadata)
         self.append_log(task_id, stage, f"阶段已推进到 {stage}")
+        state = self.load_workflow_state(task_id)
+        state.current_stage = stage
+        state.updated_at = metadata.updated_at
+        self.save_workflow_state(task_id, state)
         return metadata
 
     def append_log(self, task_id: str, stage: str, message: str) -> None:
@@ -191,6 +222,46 @@ class WorkflowManager:
         for path in self._task_files(task_dir):
             lines.append(f"- {path.name}")
         return "\n".join(lines)
+
+    def load_workflow_state(self, task_id: str) -> WorkflowState:
+        _, task_dir = self.get_task(task_id)
+        state_path = task_dir / "workflow_state.json"
+        if not state_path.exists():
+            return WorkflowState(updated_at=utc_timestamp())
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        return WorkflowState(
+            status=data.get("status", "idle"),
+            current_round=data.get("current_round", 0),
+            max_rounds=data.get("max_rounds", 0),
+            current_stage=data.get("current_stage", "intake"),
+            release_ready=data.get("release_ready", False),
+            requires_human_review=data.get("requires_human_review", False),
+            last_error=data.get("last_error", ""),
+            last_test_exit_code=data.get("last_test_exit_code", 0),
+            last_test_command=data.get("last_test_command", ""),
+            last_test_output=data.get("last_test_output", ""),
+            tester_summary=data.get("tester_summary", ""),
+            recommended_action=data.get("recommended_action", ""),
+            updated_at=data.get("updated_at", ""),
+            issues=[WorkflowIssue(**item) for item in data.get("issues", [])],
+        )
+
+    def save_workflow_state(self, task_id: str, state: WorkflowState) -> None:
+        _, task_dir = self.get_task(task_id)
+        if not state.updated_at:
+            state.updated_at = utc_timestamp()
+        (task_dir / "workflow_state.json").write_text(
+            json.dumps(
+                {
+                    **asdict(state),
+                    "issues": [asdict(issue) for issue in state.issues],
+                },
+                indent=2,
+                ensure_ascii=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     def write_execution_result(
         self,

@@ -36,16 +36,19 @@ class AgentProvider(Protocol):
 
 ROLE_PROMPTS: dict[AgentRole, str] = {
     "product_manager": (
-        "你是资深产品经理。请使用简体中文输出产品规划，包含：目标、用户流程、范围、"
-        "验收标准、风险和发布说明。内容要具体、简洁、可执行。"
+        "你是资深产品经理。请使用简体中文输出产品规划，内容至少包含：目标、用户流程、范围、非目标、验收标准、风险。"
+        "内容要具体、简洁、可执行，直接用于写入 spec.md。"
     ),
     "developer": (
-        "你是资深软件开发工程师。请使用简体中文输出实施方案，包含：架构、需要修改的文件、"
-        "API/数据契约、分步实施方案和回滚说明。内容要具体、可执行。"
+        "你是资深软件开发工程师。请使用简体中文输出实施方案，内容至少包含：涉及文件、实现策略、关键技术决策、"
+        "测试方案、回滚说明。内容要具体、可执行，直接用于写入 implementation.md。"
     ),
     "tester": (
-        "你是资深测试工程师。请使用简体中文输出测试方案，包含：功能测试、API 测试、"
-        "回归风险、边界场景、手工验收和 Docker 部署检查。内容要具体、可执行。"
+        "你是资深测试工程师。先输出一个 JSON 对象，再补充简短中文说明。"
+        'JSON 格式固定为：{"summary":"...","blocking":true,"severity":"low|medium|high",'
+        '"recommended_action":"release|fix|spec","issues":[{"title":"...","severity":"low|medium|high","blocking":true}]}. '
+        "issues 可以为空数组。blocking 表示是否阻塞发布。recommended_action 表示建议流转方向。"
+        "JSON 后面可以补充少量中文评审说明，供写入 review.md。"
     ),
 }
 

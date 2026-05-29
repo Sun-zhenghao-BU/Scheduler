@@ -281,7 +281,7 @@ function TaskDetail() {
       message.success(
         result.release_ready
           ? '流程执行完成，已达到发布条件'
-          : `流程执行完成，已进入修复阶段，自动修复轮次：${result.fix_rounds}`,
+          : `流程执行完成，当前建议动作：${result.workflow_state.recommended_action || result.final_stage}`,
       );
       await Promise.all([fetchTask(), fetchAgents()]);
     } catch (error: unknown) {
@@ -297,6 +297,7 @@ function TaskDetail() {
 
   const agentByRole = new Map(agents.map((agent) => [agent.role, agent]));
   const roles: AgentRole[] = ['product_manager', 'developer', 'tester'];
+  const workflowState = detail.workflow_state;
 
   return (
     <div className="task-detail">
@@ -345,6 +346,14 @@ function TaskDetail() {
               {requirementsConfirmed ? '已确认' : '待确认'}
             </Tag>
           </Descriptions.Item>
+          <Descriptions.Item label="工作流状态">
+            <Tag color={workflowState.release_ready ? 'green' : workflowState.requires_human_review ? 'red' : 'blue'}>
+              {workflowState.status || 'idle'}
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="建议动作">{workflowState.recommended_action || '无'}</Descriptions.Item>
+          <Descriptions.Item label="当前轮次">{workflowState.current_round}</Descriptions.Item>
+          <Descriptions.Item label="最大轮次">{workflowState.max_rounds}</Descriptions.Item>
           <Descriptions.Item label="创建时间">{new Date(detail.created_at).toLocaleString('zh-CN')}</Descriptions.Item>
           <Descriptions.Item label="更新时间">{new Date(detail.updated_at).toLocaleString('zh-CN')}</Descriptions.Item>
         </Descriptions>
@@ -437,6 +446,15 @@ function TaskDetail() {
             message="请先确认需求摘要，确认后才能执行完整的产品、开发、测试串行流程。"
           />
         )}
+        {workflowState.requires_human_review && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="当前流程已触发人工介入条件"
+            description={workflowState.last_error || workflowState.tester_summary || '请检查修复记录和测试评审。'}
+          />
+        )}
         {workflowResult && (
           <Card size="small" title="最近一次流程结果">
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -480,13 +498,49 @@ function TaskDetail() {
                 <strong>最终阶段</strong>
                 <pre>{STAGE_LABELS[workflowResult.final_stage as Stage] || workflowResult.final_stage}</pre>
               </div>
-              <div>
-                <strong>发布判定</strong>
-                <pre>{workflowResult.release_ready ? '达到发布条件' : '未达到发布条件，仍需修复'}</pre>
-              </div>
             </Space>
           </Card>
         )}
+      </div>
+
+      <div className="page-surface agents-panel">
+        <div className="section-heading">
+          <div>
+            <h3>工作流状态</h3>
+            <p>这里展示自动流程当前记住的轮次、测试结果、阻塞问题和建议动作。</p>
+          </div>
+        </div>
+        <Descriptions bordered size="small" column={2}>
+          <Descriptions.Item label="状态">{workflowState.status || 'idle'}</Descriptions.Item>
+          <Descriptions.Item label="当前阶段">{workflowState.current_stage || detail.current_stage}</Descriptions.Item>
+          <Descriptions.Item label="发布就绪">{workflowState.release_ready ? '是' : '否'}</Descriptions.Item>
+          <Descriptions.Item label="需要人工介入">{workflowState.requires_human_review ? '是' : '否'}</Descriptions.Item>
+          <Descriptions.Item label="测试命令">{workflowState.last_test_command || '无'}</Descriptions.Item>
+          <Descriptions.Item label="测试退出码">{workflowState.last_test_exit_code}</Descriptions.Item>
+          <Descriptions.Item label="Tester 摘要" span={2}>
+            {workflowState.tester_summary || '无'}
+          </Descriptions.Item>
+          <Descriptions.Item label="最近错误" span={2}>
+            {workflowState.last_error || '无'}
+          </Descriptions.Item>
+          <Descriptions.Item label="建议动作" span={2}>
+            {workflowState.recommended_action || '无'}
+          </Descriptions.Item>
+        </Descriptions>
+        <div style={{ marginTop: 12 }}>
+          <strong>阻塞问题</strong>
+          {workflowState.issues.length ? (
+            <ul style={{ marginTop: 8 }}>
+              {workflowState.issues.map((issue, index) => (
+                <li key={`${issue.title}-${index}`}>
+                  {issue.title} / severity={issue.severity} / blocking={String(issue.blocking)}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p style={{ marginTop: 8 }}>当前没有记录的结构化问题。</p>
+          )}
+        </div>
       </div>
 
       <div className="page-surface agents-panel">

@@ -30,9 +30,34 @@ export interface OpenRootChild {
   type: 'directory';
 }
 
+export interface WorkflowIssue {
+  title: string;
+  severity: string;
+  blocking: boolean;
+  source: string;
+}
+
+export interface WorkflowState {
+  status: string;
+  current_round: number;
+  max_rounds: number;
+  current_stage: string;
+  release_ready: boolean;
+  requires_human_review: boolean;
+  last_error: string;
+  last_test_exit_code: number;
+  last_test_command: string;
+  last_test_output: string;
+  tester_summary: string;
+  recommended_action: string;
+  updated_at: string;
+  issues: WorkflowIssue[];
+}
+
 export interface TaskDetail extends Task {
   files: Record<string, string>;
   journal: string;
+  workflow_state: WorkflowState;
 }
 
 export interface LLMConfig {
@@ -105,6 +130,7 @@ export interface TaskOrchestrationResult {
   final_stage: string;
   release_ready: boolean;
   fix_rounds: number;
+  workflow_state: WorkflowState;
 }
 
 export type AgentRole = 'product_manager' | 'developer' | 'tester';

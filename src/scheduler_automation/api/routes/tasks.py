@@ -11,7 +11,7 @@ from scheduler_automation.development import propose_changes, run_test_command
 from scheduler_automation.execution import ExecutionRequest, execute_task
 from scheduler_automation.orchestration import run_task_orchestration
 from scheduler_automation.project_workspace import load_workspace
-from scheduler_automation.workflow import STAGES, WorkflowManager
+from scheduler_automation.workflow import STAGES, WorkflowIssue, WorkflowManager, WorkflowState
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -57,6 +57,7 @@ class TaskDetailResponse(BaseModel):
     requirement_confirmed_at: str = ""
     files: dict[str, str]
     journal: str
+    workflow_state: dict
 
 
 class AgentResultResponse(BaseModel):
@@ -122,6 +123,7 @@ class OrchestrateTaskResponse(BaseModel):
     final_stage: str
     release_ready: bool
     fix_rounds: int
+    workflow_state: dict
 
 
 @router.get("/", response_model=list[TaskResponse])
@@ -165,6 +167,7 @@ def get_task(task_id: str):
         requirement_confirmed_at=metadata.requirement_confirmed_at,
         files=files,
         journal=journal,
+        workflow_state=asdict(manager.load_workflow_state(task_id)),
     )
 
 
@@ -369,4 +372,5 @@ async def orchestrate_task(task_id: str, req: ExecuteTaskRequest):
         final_stage=result.final_stage,
         release_ready=result.release_ready,
         fix_rounds=result.fix_rounds,
+        workflow_state=asdict(manager.load_workflow_state(task_id)),
     )
