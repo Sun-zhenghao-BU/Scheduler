@@ -133,6 +133,7 @@ async def propose_changes(workspace: Workspace, instruction: str, paths: list[st
         f"## {item['path']}\n\n```text\n{item['content']}\n```"
         for item in selected_files
     )
+    client = LLMClient(profile)
     messages = [
         {
             "role": "system",
@@ -146,13 +147,40 @@ async def propose_changes(workspace: Workspace, instruction: str, paths: list[st
             "content": f"Instruction: {instruction}\n\nCurrent files:\n\n{files_text}",
         },
     ]
-    raw = await LLMClient(profile).chat(messages)
-    return parse_proposed_changes(workspace, str(raw))
+    raw = await client.chat(messages)
+    try:
+        return parse_proposed_changes(workspace, str(raw))
+    except DevelopmentCommandError:
+        repair_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are fixing an invalid JSON response from a code editing agent. "
+                    "Return valid JSON only, without Markdown or explanation. "
+                    'Format: {"summary":"...","files":[{"path":"relative/path","content":"full file contents"}]}.'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "The previous response was not valid JSON. Repair it and return only valid JSON.\n\n"
+                    f"Original instruction:\n{instruction}\n\n"
+                    f"Original response:\n{raw}"
+                ),
+            },
+        ]
+        repaired = await client.chat(repair_messages)
+        return parse_proposed_changes(workspace, str(repaired))
 
 
 def parse_proposed_changes(workspace: Workspace, raw: str) -> tuple[str, list[FileChange]]:
     text = _extract_json(raw)
-    data: dict[str, object] = json.loads(text)
+    try:
+        data: dict[str, object] = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DevelopmentCommandError(
+            f"The model did not return valid JSON for code changes: {exc.msg}."
+        ) from exc
     summary = str(data.get("summary", "Generated code changes."))
     changes: list[FileChange] = []
     for item in data.get("files", []):  # type: ignore[assignment]
@@ -172,6 +200,18 @@ def _extract_json(raw: str) -> str:
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
     if fenced:
         return fenced.group(1).strip()
+    if text.startswith("{"):
+        return text
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        start = match.start()
+        try:
+            parsed, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return text[start:end]
     return text
 
 
