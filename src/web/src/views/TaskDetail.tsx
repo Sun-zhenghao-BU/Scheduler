@@ -526,7 +526,7 @@ function TaskDetail() {
         )}
       </div>
 
-      <div className="page-surface">
+      <div className="page-surface file-panel">
         <Tabs
           items={[
             {
