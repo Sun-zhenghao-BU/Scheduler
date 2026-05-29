@@ -123,6 +123,11 @@ export async function confirmRequirements(taskId: string, summary: string): Prom
   return data;
 }
 
+export async function reopenRequirements(taskId: string): Promise<Task> {
+  const { data } = await api.post<Task>(`/tasks/${taskId}/requirements/reopen`);
+  return data;
+}
+
 export async function executeTask(
   taskId: string,
   payload: { instruction?: string; paths?: string[]; test_command?: string; apply_changes?: boolean } = {},

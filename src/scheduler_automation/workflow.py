@@ -208,6 +208,29 @@ class WorkflowManager:
         self.append_log(task_id, metadata.current_stage, "需求已确认")
         return metadata
 
+    def reopen_requirements(self, task_id: str) -> TaskMetadata:
+        metadata, task_dir = self.get_task(task_id)
+        metadata.requirement_status = "drafting"
+        metadata.requirement_confirmed_at = ""
+        metadata.current_stage = "intake"
+        metadata.updated_at = utc_timestamp()
+        self._write_metadata(task_dir, metadata)
+
+        session = self.load_requirement_session(task_id)
+        session.status = "drafting"
+        self._write_requirement_session(task_dir, session)
+
+        state = self.load_workflow_state(task_id)
+        state.status = "needs_attention"
+        state.current_stage = "intake"
+        state.release_ready = False
+        state.requires_human_review = False
+        state.updated_at = metadata.updated_at
+        self.save_workflow_state(task_id, state)
+
+        self.append_log(task_id, "intake", "任务已退回需求确认阶段")
+        return metadata
+
     def render_task(self, task_id: str) -> str:
         metadata, task_dir = self.get_task(task_id)
         lines = [
@@ -278,28 +301,28 @@ class WorkflowManager:
         review_path = task_dir / "review.md"
         self._append_section(
             implementation_path,
-            "Execution Summary",
+            "执行摘要",
             "\n".join(
                 [
                     summary.strip(),
                     "",
-                    "Selected files:",
+                    "选中文件：",
                     *[f"- {path}" for path in selected_paths],
                     "",
-                    "Applied files:",
-                    *([f"- {path}" for path in written] if written else ["- No files written"]),
+                    "落盘文件：",
+                    *([f"- {path}" for path in written] if written else ["- 没有写入文件"]),
                 ]
             ).strip(),
         )
         self._append_section(
             review_path,
-            "Execution Test Result",
+            "执行测试结果",
             "\n".join(
                 [
-                    f"Command: {test_command or '(none)'}",
-                    f"Exit code: {test_exit_code}",
+                    f"命令：{test_command or '(none)'}",
+                    f"退出码：{test_exit_code}",
                     "",
-                    test_output.strip() or "(no output)",
+                    test_output.strip() or "(无输出)",
                 ]
             ),
         )
@@ -315,16 +338,38 @@ class WorkflowManager:
         fixes_path = task_dir / "fixes.md"
         body = "\n".join(
             [
-                f"Round: {round_number}",
+                f"轮次：{round_number}",
                 "",
-                "Tester assessment:",
-                tester_content.strip() or "(no tester output)",
+                "测试代理结论：",
+                tester_content.strip() or "(无测试代理输出)",
                 "",
-                "Failing test output:",
-                test_output.strip() or "(no test output)",
+                "失败测试输出：",
+                test_output.strip() or "(无测试输出)",
             ]
         )
-        self._append_section(fixes_path, f"Fix Round {round_number}", body)
+        self._append_section(fixes_path, f"修复轮次 {round_number}", body)
+
+    def write_spec_feedback(
+        self,
+        task_id: str,
+        round_number: int,
+        tester_summary: str,
+        test_output: str,
+    ) -> None:
+        _, task_dir = self.get_task(task_id)
+        spec_path = task_dir / "spec.md"
+        body = "\n".join(
+            [
+                "需要重新收敛方案后再继续开发。",
+                "",
+                "测试代理结论：",
+                tester_summary.strip() or "(无测试代理结论)",
+                "",
+                "最近一次测试输出：",
+                test_output.strip() or "(无测试输出)",
+            ]
+        )
+        self._append_section(spec_path, f"方案回流 Round {round_number}", body)
 
     def write_release_summary(
         self,
@@ -337,15 +382,15 @@ class WorkflowManager:
         release_path = task_dir / "release.md"
         body = "\n".join(
             [
-                summary.strip() or "Workflow marked this task ready for release.",
+                summary.strip() or "自动流程已将本任务标记为满足发布条件。",
                 "",
-                f"Final test command: {test_command or '(none)'}",
+                f"最终测试命令：{test_command or '(none)'}",
                 "",
-                "Final verification output:",
-                test_output.strip() or "(no output)",
+                "最终验证输出：",
+                test_output.strip() or "(无输出)",
             ]
         )
-        self._append_section(release_path, "Release Decision", body)
+        self._append_section(release_path, "发布结论", body)
 
     def _task_files(self, task_dir: Path) -> Iterable[Path]:
         return sorted(path for path in task_dir.iterdir() if path.is_file())

@@ -7,9 +7,10 @@ from dataclasses import dataclass, replace
 from scheduler_automation.agents.provider import AgentProvider, AgentResult
 from scheduler_automation.agents.service import run_agent_roles
 from scheduler_automation.execution import ExecutionRequest, ExecutionResult, execute_task
-from scheduler_automation.workflow import WorkflowIssue, WorkflowManager, WorkflowState, utc_timestamp
+from scheduler_automation.workflow import WorkflowIssue, WorkflowManager, utc_timestamp
 
 MAX_FIX_ROUNDS = 2
+MAX_SPEC_ROUNDS = 1
 
 
 @dataclass
@@ -30,6 +31,7 @@ class OrchestrationResult:
     final_stage: str
     release_ready: bool
     fix_rounds: int
+    spec_rounds: int
 
 
 async def run_task_orchestration(
@@ -47,7 +49,7 @@ async def run_task_orchestration(
     state = manager.load_workflow_state(task_id)
     state.status = "running"
     state.current_round = 0
-    state.max_rounds = MAX_FIX_ROUNDS
+    state.max_rounds = MAX_FIX_ROUNDS + MAX_SPEC_ROUNDS
     state.current_stage = metadata.current_stage
     state.release_ready = False
     state.requires_human_review = False
@@ -56,51 +58,73 @@ async def run_task_orchestration(
     state.issues = []
     manager.save_workflow_state(task_id, state)
 
-    manager.append_log(task_id, metadata.current_stage, "Workflow orchestration started")
+    manager.append_log(task_id, metadata.current_stage, "自动流程开始执行")
 
-    product_result = (await run_agent_roles(manager, task_id, provider, ["product_manager"]))[0]
-    _require_completed_artifact(product_result, task_dir / "spec.md", "spec.md", "Product manager")
-    manager.advance_task(task_id, "spec")
-
-    developer_result = (await run_agent_roles(manager, task_id, provider, ["developer"]))[0]
-    _require_completed_artifact(developer_result, task_dir / "implementation.md", "implementation.md", "Developer")
-
+    product_result = await _run_product_stage(manager, task_id, provider, task_dir)
+    developer_result = await _run_developer_stage(manager, task_id, provider, task_dir)
     execution_result = await execute_task(manager, task_id, execution_request, proposal_func, test_runner)
-    manager.advance_task(task_id, "review")
-
-    tester_result = (await run_agent_roles(manager, task_id, provider, ["tester"]))[0]
-    _require_completed_artifact(tester_result, task_dir / "review.md", "review.md", "Tester")
-    tester_decision = _parse_tester_decision(tester_result, execution_result)
-    _update_state_from_decision(manager, task_id, tester_decision, execution_result, 0)
+    tester_result, tester_decision = await _run_tester_stage(manager, task_id, provider, task_dir, execution_result, 0)
 
     fix_rounds = 0
-    while _should_retry(execution_result, tester_decision, fix_rounds):
-        fix_rounds += 1
-        manager.advance_task(task_id, "fix")
-        manager.write_fix_summary(task_id, fix_rounds, execution_result.test_output, tester_result.content)
-        manager.append_log(task_id, "fix", f"Starting automatic fix round {fix_rounds}")
+    spec_rounds = 0
 
-        developer_result = (await run_agent_roles(manager, task_id, provider, ["developer"]))[0]
-        _require_completed_artifact(developer_result, task_dir / "implementation.md", "implementation.md", "Developer")
+    while True:
+        if tester_decision.recommended_action == "spec" and spec_rounds < MAX_SPEC_ROUNDS:
+            spec_rounds += 1
+            manager.advance_task(task_id, "spec")
+            manager.write_spec_feedback(task_id, spec_rounds, tester_decision.summary, execution_result.test_output)
+            manager.append_log(task_id, "spec", f"开始方案回流第 {spec_rounds} 轮")
 
-        retry_request = _build_fix_execution_request(execution_request, execution_result, tester_result, fix_rounds)
-        execution_result = await execute_task(manager, task_id, retry_request, proposal_func, test_runner)
-        manager.advance_task(task_id, "review")
-        tester_result = (await run_agent_roles(manager, task_id, provider, ["tester"]))[0]
-        _require_completed_artifact(tester_result, task_dir / "review.md", "review.md", "Tester")
-        tester_decision = _parse_tester_decision(tester_result, execution_result)
-        _update_state_from_decision(manager, task_id, tester_decision, execution_result, fix_rounds)
+            product_result = await _run_product_stage(manager, task_id, provider, task_dir)
+            developer_result = await _run_developer_stage(manager, task_id, provider, task_dir)
+            retry_request = _build_spec_execution_request(execution_request, execution_result, tester_result, spec_rounds)
+            execution_result = await execute_task(manager, task_id, retry_request, proposal_func, test_runner)
+            tester_result, tester_decision = await _run_tester_stage(
+                manager,
+                task_id,
+                provider,
+                task_dir,
+                execution_result,
+                fix_rounds + spec_rounds,
+            )
+            continue
 
-    release_ready = execution_result.test_exit_code == 0 and not tester_decision.blocking and tester_decision.recommended_action != "fix"
+        if _should_retry_fix(execution_result, tester_decision, fix_rounds):
+            fix_rounds += 1
+            manager.advance_task(task_id, "fix")
+            manager.write_fix_summary(task_id, fix_rounds, execution_result.test_output, tester_result.content)
+            manager.append_log(task_id, "fix", f"开始自动修复第 {fix_rounds} 轮")
+
+            developer_result = await _run_developer_stage(manager, task_id, provider, task_dir)
+            retry_request = _build_fix_execution_request(execution_request, execution_result, tester_result, fix_rounds)
+            execution_result = await execute_task(manager, task_id, retry_request, proposal_func, test_runner)
+            tester_result, tester_decision = await _run_tester_stage(
+                manager,
+                task_id,
+                provider,
+                task_dir,
+                execution_result,
+                fix_rounds + spec_rounds,
+            )
+            continue
+
+        break
+
+    release_ready = execution_result.test_exit_code == 0 and not tester_decision.blocking and tester_decision.recommended_action == "release"
     final_stage = "release" if release_ready else ("spec" if tester_decision.recommended_action == "spec" else "fix")
     manager.advance_task(task_id, final_stage)
 
     state = manager.load_workflow_state(task_id)
     state.status = "completed" if release_ready else "needs_attention"
-    state.current_round = fix_rounds
+    state.current_round = fix_rounds + spec_rounds
+    state.max_rounds = MAX_FIX_ROUNDS + MAX_SPEC_ROUNDS
     state.current_stage = final_stage
     state.release_ready = release_ready
-    state.requires_human_review = (not release_ready) and (fix_rounds >= MAX_FIX_ROUNDS or tester_decision.recommended_action == "spec")
+    state.requires_human_review = not release_ready and (
+        (tester_decision.recommended_action == "spec" and spec_rounds >= MAX_SPEC_ROUNDS)
+        or (tester_decision.recommended_action == "fix" and fix_rounds >= MAX_FIX_ROUNDS)
+        or tester_decision.recommended_action not in {"release", "fix", "spec"}
+    )
     state.updated_at = utc_timestamp()
     manager.save_workflow_state(task_id, state)
 
@@ -111,11 +135,13 @@ async def run_task_orchestration(
             execution_result.test_command,
             execution_result.test_output,
         )
+    else:
+        manager.append_log(task_id, final_stage, f"自动流程停在 {final_stage}，建议动作：{tester_decision.recommended_action}")
+
     manager.append_log(
         task_id,
         final_stage,
-        "Workflow orchestration finished"
-        + (" and is ready for release" if release_ready else " and still requires fixes"),
+        "自动流程结束" + ("，已达到发布条件" if release_ready else "，需要继续处理"),
     )
     return OrchestrationResult(
         product_result=product_result,
@@ -125,14 +151,44 @@ async def run_task_orchestration(
         final_stage=final_stage,
         release_ready=release_ready,
         fix_rounds=fix_rounds,
+        spec_rounds=spec_rounds,
     )
+
+
+async def _run_product_stage(manager: WorkflowManager, task_id: str, provider: AgentProvider, task_dir) -> AgentResult:
+    product_result = (await run_agent_roles(manager, task_id, provider, ["product_manager"]))[0]
+    _require_completed_artifact(product_result, task_dir / "spec.md", "spec.md", "产品经理")
+    manager.advance_task(task_id, "spec")
+    return product_result
+
+
+async def _run_developer_stage(manager: WorkflowManager, task_id: str, provider: AgentProvider, task_dir) -> AgentResult:
+    developer_result = (await run_agent_roles(manager, task_id, provider, ["developer"]))[0]
+    _require_completed_artifact(developer_result, task_dir / "implementation.md", "implementation.md", "开发代理")
+    return developer_result
+
+
+async def _run_tester_stage(
+    manager: WorkflowManager,
+    task_id: str,
+    provider: AgentProvider,
+    task_dir,
+    execution_result: ExecutionResult,
+    round_number: int,
+) -> tuple[AgentResult, TesterDecision]:
+    manager.advance_task(task_id, "review")
+    tester_result = (await run_agent_roles(manager, task_id, provider, ["tester"]))[0]
+    _require_completed_artifact(tester_result, task_dir / "review.md", "review.md", "测试代理")
+    tester_decision = _parse_tester_decision(tester_result, execution_result)
+    _update_state_from_decision(manager, task_id, tester_decision, execution_result, round_number)
+    return tester_result, tester_decision
 
 
 def _require_completed_artifact(result: AgentResult, path, file_name: str, owner: str) -> None:
     if result.status != "completed":
-        raise ValueError(result.error or f"{owner} failed to produce {file_name}.")
+        raise ValueError(result.error or f"{owner} 未能生成 {file_name}。")
     if not path.exists() or not path.read_text(encoding="utf-8").strip():
-        raise ValueError(f"{file_name} was not generated.")
+        raise ValueError(f"{file_name} 未生成。")
 
 
 def _build_fix_execution_request(
@@ -148,6 +204,21 @@ def _build_fix_execution_request(
         "Update the implementation to resolve the failure while keeping the approved requirement intact."
     )
     return replace(base_request, instruction=fix_instruction)
+
+
+def _build_spec_execution_request(
+    base_request: ExecutionRequest,
+    execution_result: ExecutionResult,
+    tester_result: AgentResult,
+    round_number: int,
+) -> ExecutionRequest:
+    spec_instruction = ((base_request.instruction.strip() + "\n\n") if base_request.instruction.strip() else "") + (
+        f"Spec round {round_number}.\n\n"
+        f"Tester review:\n{tester_result.content or tester_result.error}\n\n"
+        f"Recent test output:\n{execution_result.test_output}\n\n"
+        "Refine the implementation based on the revised product plan. Resolve requirement gaps before coding."
+    )
+    return replace(base_request, instruction=spec_instruction)
 
 
 def _extract_json_object(content: str) -> dict[str, object] | None:
@@ -183,7 +254,7 @@ def _parse_tester_decision(result: AgentResult, execution_result: ExecutionResul
                 )
             )
         return TesterDecision(
-            summary=str(data.get("summary", "")).strip() or "Tester completed review.",
+            summary=str(data.get("summary", "")).strip() or "测试代理已完成评审。",
             blocking=bool(data.get("blocking", execution_result.test_exit_code != 0)),
             severity=str(data.get("severity", "medium")),
             recommended_action=str(data.get("recommended_action", "fix")),
@@ -192,12 +263,12 @@ def _parse_tester_decision(result: AgentResult, execution_result: ExecutionResul
 
     fallback_blocking = execution_result.test_exit_code != 0
     return TesterDecision(
-        summary=result.content.strip() or ("Tests passed." if not fallback_blocking else "Tests failed and require fixes."),
+        summary=result.content.strip() or ("测试通过。" if not fallback_blocking else "测试失败，需要修复。"),
         blocking=fallback_blocking,
         severity="high" if fallback_blocking else "low",
         recommended_action="fix" if fallback_blocking else "release",
         issues=(
-            [WorkflowIssue(title="Test command failed", severity="high", blocking=True, source="tester")]
+            [WorkflowIssue(title="测试命令失败", severity="high", blocking=True, source="tester")]
             if fallback_blocking
             else []
         ),
@@ -226,7 +297,7 @@ def _update_state_from_decision(
     manager.save_workflow_state(task_id, state)
 
 
-def _should_retry(execution_result: ExecutionResult, tester_decision: TesterDecision, fix_rounds: int) -> bool:
+def _should_retry_fix(execution_result: ExecutionResult, tester_decision: TesterDecision, fix_rounds: int) -> bool:
     return (
         fix_rounds < MAX_FIX_ROUNDS
         and (execution_result.test_exit_code != 0 or tester_decision.blocking)

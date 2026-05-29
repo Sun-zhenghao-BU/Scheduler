@@ -130,6 +130,7 @@ export interface TaskOrchestrationResult {
   final_stage: string;
   release_ready: boolean;
   fix_rounds: number;
+  spec_rounds: number;
   workflow_state: WorkflowState;
 }
 

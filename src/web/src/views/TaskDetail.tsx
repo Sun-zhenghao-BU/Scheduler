@@ -22,6 +22,7 @@ import {
   SendOutlined,
   StepForwardOutlined,
   TeamOutlined,
+  UndoOutlined,
 } from '@ant-design/icons';
 import {
   addRequirementMessage,
@@ -31,6 +32,7 @@ import {
   getRequirements,
   getTask,
   orchestrateTask,
+  reopenRequirements,
   runAgentWorkflow,
   updateTaskFile,
 } from '../api';
@@ -157,47 +159,48 @@ function TaskDetail() {
       Object.entries(detail?.files ?? {}).map(([name, content]) => ({
         key: name,
         label: FILE_LABELS[name] || name,
-        children: editingFile === name ? (
-          <div>
-            <TextArea
-              value={editContent}
-              onChange={(event) => setEditContent(event.target.value)}
-              rows={20}
-              style={{ fontFamily: 'monospace', marginBottom: 8 }}
-            />
-            <Space>
-              <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveFile}>
-                保存
+        children:
+          editingFile === name ? (
+            <div>
+              <TextArea
+                value={editContent}
+                onChange={(event) => setEditContent(event.target.value)}
+                rows={20}
+                style={{ fontFamily: 'monospace', marginBottom: 8 }}
+              />
+              <Space>
+                <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveFile}>
+                  保存
+                </Button>
+                <Button onClick={() => setEditingFile(null)}>取消</Button>
+              </Space>
+            </div>
+          ) : (
+            <div>
+              <Button
+                size="small"
+                style={{ marginBottom: 8 }}
+                onClick={() => {
+                  setEditingFile(name);
+                  setEditContent(content);
+                }}
+              >
+                编辑
               </Button>
-              <Button onClick={() => setEditingFile(null)}>取消</Button>
-            </Space>
-          </div>
-        ) : (
-          <div>
-            <Button
-              size="small"
-              style={{ marginBottom: 8 }}
-              onClick={() => {
-                setEditingFile(name);
-                setEditContent(content);
-              }}
-            >
-              编辑
-            </Button>
-            <pre
-              style={{
-                whiteSpace: 'pre-wrap',
-                background: '#f5f5f5',
-                padding: 16,
-                borderRadius: 4,
-                maxHeight: '60vh',
-                overflow: 'auto',
-              }}
-            >
-              {content}
-            </pre>
-          </div>
-        ),
+              <pre
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  background: '#f5f5f5',
+                  padding: 16,
+                  borderRadius: 4,
+                  maxHeight: '60vh',
+                  overflow: 'auto',
+                }}
+              >
+                {content}
+              </pre>
+            </div>
+          ),
       })),
     [detail?.files, editContent, editingFile],
   );
@@ -212,7 +215,7 @@ function TaskDetail() {
     }
     try {
       await advanceTask(taskId, nextStage);
-      message.success(`已推进到${STAGE_LABELS[nextStage as Stage]}`);
+      message.success(`已推进到 ${STAGE_LABELS[nextStage as Stage]}`);
       await fetchTask();
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '阶段推进失败'));
@@ -248,6 +251,22 @@ function TaskDetail() {
       await Promise.all([fetchTask(), fetchRequirements()]);
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '需求确认失败'));
+    } finally {
+      setRequirementsLoading(false);
+    }
+  }
+
+  async function handleReopenRequirements() {
+    if (!taskId) {
+      return;
+    }
+    setRequirementsLoading(true);
+    try {
+      await reopenRequirements(taskId);
+      message.success('任务已退回需求确认阶段');
+      await Promise.all([fetchTask(), fetchRequirements()]);
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '退回需求确认失败'));
     } finally {
       setRequirementsLoading(false);
     }
@@ -298,6 +317,7 @@ function TaskDetail() {
   const agentByRole = new Map(agents.map((agent) => [agent.role, agent]));
   const roles: AgentRole[] = ['product_manager', 'developer', 'tester'];
   const workflowState = detail.workflow_state;
+  const shouldReopenSpec = workflowState.requires_human_review && workflowState.recommended_action === 'spec';
 
   return (
     <div className="task-detail">
@@ -318,13 +338,13 @@ function TaskDetail() {
           size="small"
           extra={
             nextStage ? (
-              <Popconfirm title={`确认推进到${STAGE_LABELS[nextStage as Stage]}？`} onConfirm={handleAdvance}>
+              <Popconfirm title={`确认推进到 ${STAGE_LABELS[nextStage as Stage]}？`} onConfirm={handleAdvance}>
                 <Button
                   type="default"
                   icon={<StepForwardOutlined />}
                   disabled={nextStage === 'implement' && !requirementsConfirmed}
                 >
-                  推进到{STAGE_LABELS[nextStage as Stage]}
+                  推进到 {STAGE_LABELS[nextStage as Stage]}
                 </Button>
               </Popconfirm>
             ) : (
@@ -453,6 +473,13 @@ function TaskDetail() {
             style={{ marginBottom: 12 }}
             message="当前流程已触发人工介入条件"
             description={workflowState.last_error || workflowState.tester_summary || '请检查修复记录和测试评审。'}
+            action={
+              shouldReopenSpec ? (
+                <Button size="small" icon={<UndoOutlined />} loading={requirementsLoading} onClick={handleReopenRequirements}>
+                  退回需求确认
+                </Button>
+              ) : undefined
+            }
           />
         )}
         {workflowResult && (
@@ -495,6 +522,10 @@ function TaskDetail() {
                 <pre>{String(workflowResult.fix_rounds)}</pre>
               </div>
               <div>
+                <strong>方案回流轮次</strong>
+                <pre>{String(workflowResult.spec_rounds)}</pre>
+              </div>
+              <div>
                 <strong>最终阶段</strong>
                 <pre>{STAGE_LABELS[workflowResult.final_stage as Stage] || workflowResult.final_stage}</pre>
               </div>
@@ -517,7 +548,7 @@ function TaskDetail() {
           <Descriptions.Item label="需要人工介入">{workflowState.requires_human_review ? '是' : '否'}</Descriptions.Item>
           <Descriptions.Item label="测试命令">{workflowState.last_test_command || '无'}</Descriptions.Item>
           <Descriptions.Item label="测试退出码">{workflowState.last_test_exit_code}</Descriptions.Item>
-          <Descriptions.Item label="Tester 摘要" span={2}>
+          <Descriptions.Item label="测试代理摘要" span={2}>
             {workflowState.tester_summary || '无'}
           </Descriptions.Item>
           <Descriptions.Item label="最近错误" span={2}>

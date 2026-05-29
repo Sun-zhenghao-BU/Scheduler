@@ -51,6 +51,20 @@ class WorkflowManagerTests(unittest.TestCase):
             self.assertEqual(session.status, "confirmed")
             self.assertIn("Build a PM-led requirement confirmation flow", session.summary)
 
+    def test_reopen_requirements_returns_task_to_intake(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = WorkflowManager(Path(temp_dir))
+            metadata = manager.create_task("Build chat flow", "Need a PM chat.")
+            manager.confirm_requirements(metadata.task_id, "Build a PM-led requirement confirmation flow.")
+
+            reopened = manager.reopen_requirements(metadata.task_id)
+
+            self.assertEqual(reopened.current_stage, "intake")
+            self.assertEqual(reopened.requirement_status, "drafting")
+            self.assertEqual(reopened.requirement_confirmed_at, "")
+            session = manager.load_requirement_session(metadata.task_id)
+            self.assertEqual(session.status, "drafting")
+
     def test_advance_task_updates_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = WorkflowManager(Path(temp_dir))

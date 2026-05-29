@@ -11,7 +11,7 @@ from scheduler_automation.development import propose_changes, run_test_command
 from scheduler_automation.execution import ExecutionRequest, execute_task
 from scheduler_automation.orchestration import run_task_orchestration
 from scheduler_automation.project_workspace import load_workspace
-from scheduler_automation.workflow import STAGES, WorkflowIssue, WorkflowManager, WorkflowState
+from scheduler_automation.workflow import STAGES, WorkflowManager
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -123,6 +123,7 @@ class OrchestrateTaskResponse(BaseModel):
     final_stage: str
     release_ready: bool
     fix_rounds: int
+    spec_rounds: int
     workflow_state: dict
 
 
@@ -220,6 +221,16 @@ def confirm_requirements(task_id: str, req: RequirementConfirmRequest):
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return TaskResponse(**asdict(metadata))
+
+
+@router.post("/{task_id}/requirements/reopen", response_model=TaskResponse)
+def reopen_requirements(task_id: str):
+    manager = get_manager()
+    try:
+        metadata = manager.reopen_requirements(task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     return TaskResponse(**asdict(metadata))
 
 
@@ -372,5 +383,6 @@ async def orchestrate_task(task_id: str, req: ExecuteTaskRequest):
         final_stage=result.final_stage,
         release_ready=result.release_ready,
         fix_rounds=result.fix_rounds,
+        spec_rounds=result.spec_rounds,
         workflow_state=asdict(manager.load_workflow_state(task_id)),
     )
