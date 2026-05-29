@@ -16,6 +16,11 @@ ROLE_FILES: dict[AgentRole, str] = {
     "developer": "implementation.md",
     "tester": "review.md",
 }
+ROLE_HEADINGS: dict[AgentRole, str] = {
+    "product_manager": "产品经理输出",
+    "developer": "开发代理输出",
+    "tester": "测试代理输出",
+}
 
 
 def load_agent_results(manager: WorkflowManager, task_id: str) -> list[AgentResult]:
@@ -39,7 +44,7 @@ async def run_agent_workflow(
 
     for result in results:
         if result.status == "completed":
-            (task_dir / ROLE_FILES[result.role]).write_text(result.content, encoding="utf-8")
+            _write_role_artifact(task_dir, result)
 
     _write_agent_results(task_dir, results)
     manager.append_log(task_id, metadata.current_stage, "Agent workflow finished")
@@ -60,7 +65,7 @@ async def run_agent_roles(
         task_context = _task_context(manager, metadata.project_id, task_dir)
         result = await provider.run(role, metadata.title, task_context)
         if result.status == "completed":
-            (task_dir / ROLE_FILES[result.role]).write_text(result.content, encoding="utf-8")
+            _write_role_artifact(task_dir, result)
         existing[role] = result
         results.append(result)
 
@@ -75,6 +80,17 @@ def _write_agent_results(task_dir: Path, results: list[AgentResult]) -> None:
         json.dumps({"results": [result.to_dict() for result in results]}, indent=2, ensure_ascii=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _write_role_artifact(task_dir: Path, result: AgentResult) -> None:
+    path = task_dir / ROLE_FILES[result.role]
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    heading = ROLE_HEADINGS[result.role]
+    if existing.strip():
+        content = existing.rstrip() + f"\n\n## {heading}\n\n{result.content.strip()}\n"
+    else:
+        content = result.content.strip() + "\n"
+    path.write_text(content, encoding="utf-8")
 
 
 def _task_context(manager: WorkflowManager, project_id: str, task_dir: Path) -> str:

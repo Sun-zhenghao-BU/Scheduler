@@ -205,6 +205,22 @@ class WorkflowManager:
         session.summary = summary.strip()
         self._write_requirement_session(task_dir, session)
         (task_dir / "spec.md").write_text(self._confirmed_spec_template(metadata.title, summary.strip()), encoding="utf-8")
+        state = self.load_workflow_state(task_id)
+        state.status = "idle"
+        state.current_round = 0
+        state.max_rounds = 0
+        state.current_stage = metadata.current_stage
+        state.release_ready = False
+        state.requires_human_review = False
+        state.last_error = ""
+        state.last_test_exit_code = 0
+        state.last_test_command = ""
+        state.last_test_output = ""
+        state.tester_summary = ""
+        state.recommended_action = ""
+        state.issues = []
+        state.updated_at = confirmed_at
+        self.save_workflow_state(task_id, state)
         self.append_log(task_id, metadata.current_stage, "需求已确认")
         return metadata
 
@@ -222,9 +238,18 @@ class WorkflowManager:
 
         state = self.load_workflow_state(task_id)
         state.status = "needs_attention"
+        state.current_round = 0
+        state.max_rounds = 0
         state.current_stage = "intake"
         state.release_ready = False
         state.requires_human_review = False
+        state.last_error = ""
+        state.last_test_exit_code = 0
+        state.last_test_command = ""
+        state.last_test_output = ""
+        state.tester_summary = ""
+        state.recommended_action = ""
+        state.issues = []
         state.updated_at = metadata.updated_at
         self.save_workflow_state(task_id, state)
 
