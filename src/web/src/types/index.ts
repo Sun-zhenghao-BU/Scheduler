@@ -145,16 +145,6 @@ export interface TaskOrchestrationResult {
   workflow_state: WorkflowState;
 }
 
-export type AgentRole = 'product_manager' | 'developer' | 'tester';
-export type AgentStatus = 'completed' | 'failed';
-
-export interface AgentResult {
-  role: AgentRole;
-  status: AgentStatus;
-  content: string;
-  error: string;
-}
-
 export interface RequirementMessage {
   role: 'user' | 'product_manager';
   content: string;
@@ -168,12 +158,6 @@ export interface RequirementSession {
   suggested_summary: string;
   messages: RequirementMessage[];
 }
-
-export const AGENT_LABELS: Record<AgentRole, string> = {
-  product_manager: '产品经理',
-  developer: '开发代理',
-  tester: '测试代理',
-};
 
 export const STAGES = ['intake', 'spec', 'implement', 'review', 'fix', 'release'] as const;
 export type Stage = (typeof STAGES)[number];

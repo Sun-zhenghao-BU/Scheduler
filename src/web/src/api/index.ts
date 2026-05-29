@@ -1,6 +1,5 @@
 import axios from 'axios';
 import type {
-  AgentResult,
   DevelopmentProposal,
   LLMConfig,
   OpenRoot,
@@ -92,16 +91,6 @@ export async function logTask(taskId: string, stage: string, message: string): P
 
 export async function updateTaskFile(taskId: string, fileName: string, content: string): Promise<void> {
   await api.put(`/tasks/${taskId}/files/${fileName}`, { content });
-}
-
-export async function getAgentResults(taskId: string): Promise<AgentResult[]> {
-  const { data } = await api.get<AgentResult[]>(`/tasks/${taskId}/agents`);
-  return data;
-}
-
-export async function runAgentWorkflow(taskId: string): Promise<AgentResult[]> {
-  const { data } = await api.post<AgentResult[]>(`/tasks/${taskId}/agents/run`);
-  return data;
 }
 
 export async function getRequirements(taskId: string): Promise<RequirementSession> {

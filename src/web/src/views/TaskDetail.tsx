@@ -4,11 +4,9 @@ import {
   Alert,
   Button,
   Card,
-  Col,
   Descriptions,
   Input,
   Popconfirm,
-  Row,
   Space,
   Tabs,
   Tag,
@@ -21,7 +19,6 @@ import {
   SaveOutlined,
   SendOutlined,
   StepForwardOutlined,
-  TeamOutlined,
   UndoOutlined,
 } from '@ant-design/icons';
 import {
@@ -29,41 +26,31 @@ import {
   advanceTask,
   autoRefineRequirements,
   confirmRequirementsAndStart,
-  generateRequirementQuestion,
-  getAgentResults,
   getRequirements,
   getTask,
   orchestrateTask,
   reopenRequirements,
-  runAgentWorkflow,
   updateTaskFile,
 } from '../api';
 import type {
-  AgentResult,
-  AgentRole,
   RequirementSession,
   Stage,
   TaskDetail as TaskDetailModel,
   TaskOrchestrationResult,
 } from '../types';
-import { AGENT_LABELS, STAGES, STAGE_COLORS, STAGE_LABELS } from '../types';
+import { STAGE_COLORS, STAGE_LABELS, STAGES } from '../types';
 import { getErrorMessage } from '../utils/error';
 
 const { TextArea } = Input;
 
-const AGENT_STATUS_LABELS: Record<string, string> = {
-  completed: '已完成',
-  failed: '失败',
-  pending: '未运行',
-};
-
 const FILE_LABELS: Record<string, string> = {
-  'request.md': '需求',
+  'request.md': '需求原文',
   'spec.md': '产品规划',
   'implementation.md': '实施方案',
   'review.md': '测试评审',
   'fixes.md': '修复记录',
   'release.md': '发布记录',
+  'workflow_state.json': '工作流状态',
 };
 
 function TaskDetail() {
@@ -72,47 +59,35 @@ function TaskDetail() {
 
   const [detail, setDetail] = useState<TaskDetailModel | null>(null);
   const [loading, setLoading] = useState(true);
-  const [agents, setAgents] = useState<AgentResult[]>([]);
-  const [agentsLoading, setAgentsLoading] = useState(false);
   const [requirements, setRequirements] = useState<RequirementSession | null>(null);
   const [requirementsLoading, setRequirementsLoading] = useState(false);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowResult, setWorkflowResult] = useState<TaskOrchestrationResult | null>(null);
   const [requirementMessage, setRequirementMessage] = useState('');
   const [requirementSummary, setRequirementSummary] = useState('');
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
-  const [workflowLoading, setWorkflowLoading] = useState(false);
-  const [workflowResult, setWorkflowResult] = useState<TaskOrchestrationResult | null>(null);
 
   const fetchTask = useCallback(async () => {
-    if (!taskId) return;
+    if (!taskId) return null;
     const data = await getTask(taskId);
     setDetail(data);
     return data;
   }, [taskId]);
 
   const fetchRequirements = useCallback(async () => {
-    if (!taskId) return;
+    if (!taskId) return null;
     const data = await getRequirements(taskId);
     setRequirements(data);
     setRequirementSummary(data.summary || data.suggested_summary || '');
     return data;
   }, [taskId]);
 
-  const fetchAgents = useCallback(async () => {
-    if (!taskId) return;
-    try {
-      const data = await getAgentResults(taskId);
-      setAgents(data);
-    } catch {
-      setAgents([]);
-    }
-  }, [taskId]);
-
   useEffect(() => {
     if (!taskId) return;
     let cancelled = false;
     setLoading(true);
-    Promise.allSettled([fetchTask(), fetchRequirements(), fetchAgents()]).then((results) => {
+    Promise.allSettled([fetchTask(), fetchRequirements()]).then((results) => {
       if (cancelled) return;
       if (results[0].status === 'rejected') {
         message.error('任务加载失败');
@@ -125,25 +100,12 @@ function TaskDetail() {
     return () => {
       cancelled = true;
     };
-  }, [taskId, fetchTask, fetchRequirements, fetchAgents]);
+  }, [fetchRequirements, fetchTask, taskId]);
 
   const currentStage = detail?.current_stage as Stage | undefined;
   const currentIdx = currentStage ? STAGES.indexOf(currentStage) : -1;
   const nextStage = currentIdx >= 0 && currentIdx < STAGES.length - 1 ? STAGES[currentIdx + 1] : null;
   const requirementsConfirmed = detail?.requirement_status === 'confirmed';
-
-  async function handleSaveFile() {
-    if (!taskId || !editingFile) return;
-    try {
-      await updateTaskFile(taskId, editingFile, editContent);
-      message.success('文件已保存');
-      setEditingFile(null);
-      await fetchTask();
-    } catch (error: unknown) {
-      message.error(getErrorMessage(error, '文件保存失败'));
-    }
-  }
-
   const fileTabs = useMemo(
     () =>
       Object.entries(detail?.files ?? {}).map(([name, content]) => ({
@@ -195,8 +157,20 @@ function TaskDetail() {
     [detail?.files, editContent, editingFile],
   );
 
+  async function handleSaveFile() {
+    if (!taskId || !editingFile) return;
+    try {
+      await updateTaskFile(taskId, editingFile, editContent);
+      message.success('文件已保存');
+      setEditingFile(null);
+      await fetchTask();
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '文件保存失败'));
+    }
+  }
+
   async function handleAdvance() {
-    if (!detail || !taskId || !nextStage) return;
+    if (!taskId || !nextStage) return;
     if (nextStage === 'implement' && !requirementsConfirmed) {
       message.warning('请先确认需求，再进入实施阶段');
       return;
@@ -228,25 +202,6 @@ function TaskDetail() {
     }
   }
 
-  async function handleAskProductManager() {
-    if (!taskId) return;
-    setRequirementsLoading(true);
-    try {
-      const updated = await generateRequirementQuestion(taskId);
-      setRequirements(updated);
-      if (!updated.summary && updated.suggested_summary) {
-        setRequirementSummary(updated.suggested_summary);
-      }
-      message.success(
-        updated.next_action === 'confirm' ? '产品经理判断信息已足够，可以确认摘要' : '产品经理已给出下一步问题',
-      );
-    } catch (error: unknown) {
-      message.error(getErrorMessage(error, '生成产品经理问题失败'));
-    } finally {
-      setRequirementsLoading(false);
-    }
-  }
-
   async function handleAutoRefineRequirements() {
     if (!taskId) return;
     setRequirementsLoading(true);
@@ -257,7 +212,9 @@ function TaskDetail() {
         setRequirementSummary(updated.suggested_summary);
       }
       message.success(
-        updated.next_action === 'confirm' ? '需求已自动收敛到可确认状态' : '已完成一轮自动收敛，请继续补充需求',
+        updated.next_action === 'confirm'
+          ? '需求已自动收敛到可确认状态'
+          : '已完成一轮自动收敛，请继续补充需求',
       );
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '自动收敛需求失败'));
@@ -268,7 +225,7 @@ function TaskDetail() {
 
   async function handleConfirmRequirements() {
     if (!taskId || !requirementSummary.trim()) {
-      message.warning('请填写确认后的需求摘要');
+      message.warning('请填写最终确认的需求摘要');
       return;
     }
     setRequirementsLoading(true);
@@ -279,11 +236,13 @@ function TaskDetail() {
       message.success(
         result.release_ready
           ? '需求已确认，自动流程已完成并达到发布条件'
-          : `需求已确认，自动流程已启动，当前建议动作：${result.workflow_state.recommended_action || result.final_stage}`,
+          : `需求已确认，自动流程已启动，当前建议动作：${
+              result.workflow_state.recommended_action || result.final_stage
+            }`,
       );
-      await Promise.all([fetchTask(), fetchRequirements(), fetchAgents()]);
+      await Promise.all([fetchTask(), fetchRequirements()]);
     } catch (error: unknown) {
-      message.error(getErrorMessage(error, '需求确认并启动自动流程失败'));
+      message.error(getErrorMessage(error, '确认需求并启动流程失败'));
     } finally {
       setRequirementsLoading(false);
       setWorkflowLoading(false);
@@ -304,21 +263,6 @@ function TaskDetail() {
     }
   }
 
-  async function handleRunAgents() {
-    if (!taskId) return;
-    setAgentsLoading(true);
-    try {
-      const results = await runAgentWorkflow(taskId);
-      setAgents(results);
-      message.success('辅助代理分析已完成');
-      await fetchTask();
-    } catch (error: unknown) {
-      message.error(getErrorMessage(error, '辅助代理分析失败'));
-    } finally {
-      setAgentsLoading(false);
-    }
-  }
-
   async function handleStartWorkflow() {
     if (!taskId) return;
     setWorkflowLoading(true);
@@ -330,7 +274,7 @@ function TaskDetail() {
           ? '流程执行完成，已达到发布条件'
           : `流程执行完成，当前建议动作：${result.workflow_state.recommended_action || result.final_stage}`,
       );
-      await Promise.all([fetchTask(), fetchAgents()]);
+      await fetchTask();
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '自动流程执行失败'));
     } finally {
@@ -348,10 +292,9 @@ function TaskDetail() {
     return loading ? <p>加载中...</p> : <p>任务不存在</p>;
   }
 
-  const agentByRole = new Map(agents.map((agent) => [agent.role, agent]));
-  const roles: AgentRole[] = ['product_manager', 'developer', 'tester'];
   const workflowState = detail.workflow_state;
-  const shouldReopenSpec = workflowState.requires_human_review && workflowState.recommended_action === 'spec';
+  const shouldReopenRequirements =
+    workflowState.requires_human_review && workflowState.recommended_action === 'spec';
 
   return (
     <div className="task-detail">
@@ -373,7 +316,11 @@ function TaskDetail() {
           extra={
             nextStage ? (
               <Popconfirm title={`确认推进到 ${STAGE_LABELS[nextStage as Stage]}？`} onConfirm={handleAdvance}>
-                <Button type="default" icon={<StepForwardOutlined />} disabled={nextStage === 'implement' && !requirementsConfirmed}>
+                <Button
+                  type="default"
+                  icon={<StepForwardOutlined />}
+                  disabled={nextStage === 'implement' && !requirementsConfirmed}
+                >
                   推进到 {STAGE_LABELS[nextStage as Stage]}
                 </Button>
               </Popconfirm>
@@ -409,19 +356,24 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>需求确认</h3>
-            <p>先由产品经理判断下一步是继续追问还是可以确认。确认摘要后，系统会立即自动进入后续开发测试流程。</p>
+            <p>先收敛需求，再锁定摘要。摘要确认后，系统会立即进入后续开发测试流程。</p>
           </div>
           <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
         {!requirementsConfirmed && (
-          <Alert type="warning" showIcon message="当前任务还不能进入自动流程，请先完成需求确认。" style={{ marginBottom: 12 }} />
+          <Alert
+            type="warning"
+            showIcon
+            message="当前任务还不能进入自动流程，请先完成需求确认。"
+            style={{ marginBottom: 12 }}
+          />
         )}
         {!requirementsConfirmed && requirements?.next_action === 'confirm' && requirements.suggested_summary && (
           <Alert
             type="success"
             showIcon
             style={{ marginBottom: 12 }}
-            message="产品经理判断信息已足够，可以确认摘要"
+            message="当前信息已足够，可以确认需求摘要。"
             description={requirements.suggested_summary}
             action={
               <Button size="small" icon={<CheckCircleOutlined />} onClick={adoptSuggestedSummary}>
@@ -447,15 +399,12 @@ function TaskDetail() {
         {!requirementsConfirmed && (
           <>
             <div className="requirement-inputs">
-              <Space>
+              <Space wrap>
                 <Button loading={requirementsLoading} onClick={handleAutoRefineRequirements}>
                   自动收敛需求
                 </Button>
-                <Button loading={requirementsLoading} onClick={handleAskProductManager}>
-                  产品经理判断下一步
-                </Button>
                 <Tag color={requirements?.next_action === 'confirm' ? 'green' : 'blue'}>
-                  {requirements?.next_action === 'confirm' ? '可确认摘要' : '继续追问'}
+                  {requirements?.next_action === 'confirm' ? '可确认摘要' : '继续补充'}
                 </Tag>
               </Space>
             </div>
@@ -464,7 +413,7 @@ function TaskDetail() {
                 value={requirementMessage}
                 onChange={(event) => setRequirementMessage(event.target.value)}
                 rows={3}
-                placeholder="回答产品经理的问题，或者补充边界条件、验收标准、上下文。"
+                placeholder="补充边界条件、业务规则、验收标准、异常情况或依赖约束。"
               />
               <Space style={{ marginTop: 8 }}>
                 <Button icon={<SendOutlined />} loading={requirementsLoading} onClick={handleAddRequirementMessage}>
@@ -480,11 +429,16 @@ function TaskDetail() {
             onChange={(event) => setRequirementSummary(event.target.value)}
             rows={5}
             disabled={requirementsConfirmed}
-            placeholder="当信息足够后，在这里填写最终确认的需求摘要。"
+            placeholder="在这里填写最终确认的需求摘要。"
           />
           {!requirementsConfirmed && (
             <Space style={{ marginTop: 8 }}>
-              <Button type="primary" icon={<CheckCircleOutlined />} loading={requirementsLoading} onClick={handleConfirmRequirements}>
+              <Button
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                loading={requirementsLoading || workflowLoading}
+                onClick={handleConfirmRequirements}
+              >
                 确认需求并启动流程
               </Button>
             </Space>
@@ -492,28 +446,39 @@ function TaskDetail() {
         </div>
       </div>
 
-      <div className="page-surface agents-panel">
+      <div className="page-surface workflow-panel">
         <div className="section-heading">
           <div>
             <h3>自动流程</h3>
-            <p>点击后会按顺序执行：生成产品规划、生成实施方案、实际改代码、测试评审；如果失败，会自动进入修复并重新开发、回测。</p>
+            <p>这里是主执行链。辅助代理分析已经从主界面移除，不再作为单独入口保留。</p>
           </div>
-          <Button type="primary" icon={<PlayCircleOutlined />} loading={workflowLoading} disabled={!requirementsConfirmed} onClick={handleStartWorkflow}>
+          <Button
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            loading={workflowLoading}
+            disabled={!requirementsConfirmed}
+            onClick={handleStartWorkflow}
+          >
             开始自动流程
           </Button>
         </div>
         {!requirementsConfirmed && (
-          <Alert type="info" showIcon style={{ marginBottom: 12 }} message="请先完成需求确认，确认后才能执行完整的产品、开发、测试串行流程。" />
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="请先完成需求确认，确认后才能执行完整的产品、开发、测试串行流程。"
+          />
         )}
         {workflowState.requires_human_review && (
           <Alert
             type="error"
             showIcon
             style={{ marginBottom: 12 }}
-            message="当前流程已触发人工介入条件"
+            message="当前流程已触发人工介入条件。"
             description={workflowState.last_error || workflowState.tester_summary || '请检查修复记录和测试评审。'}
             action={
-              shouldReopenSpec ? (
+              shouldReopenRequirements ? (
                 <Button size="small" icon={<UndoOutlined />} loading={requirementsLoading} onClick={handleReopenRequirements}>
                   退回需求确认
                 </Button>
@@ -521,6 +486,47 @@ function TaskDetail() {
             }
           />
         )}
+
+        <Card size="small" title="发布门禁" style={{ marginBottom: 12 }}>
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <div>
+              <strong>门禁状态：</strong>
+              <Tag color={workflowState.release_gate_status === 'passed' ? 'green' : 'red'}>
+                {workflowState.release_gate_status || 'unknown'}
+              </Tag>
+            </div>
+            <div>
+              <strong>门禁结论：</strong>
+              <span>{workflowState.release_gate_reason || '暂无'}</span>
+            </div>
+            {(workflowState.release_gate_checks || []).map((check) => (
+              <div key={check.name}>
+                <Tag color={check.passed ? 'green' : 'red'}>{check.passed ? '通过' : '拦截'}</Tag>
+                <strong>{check.name}</strong>
+                <span style={{ marginLeft: 8 }}>{check.detail}</span>
+              </div>
+            ))}
+          </Space>
+        </Card>
+
+        {(workflowState.issues || []).length > 0 && (
+          <Card size="small" title="阻塞问题" style={{ marginBottom: 12 }}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              {workflowState.issues.map((issue, index) => (
+                <div key={`${issue.title}-${index}`}>
+                  <Space wrap>
+                    <Tag color={issue.blocking ? 'red' : 'orange'}>{issue.blocking ? '阻塞' : '非阻塞'}</Tag>
+                    <Tag>{issue.severity}</Tag>
+                    {issue.category ? <Tag>{issue.category}</Tag> : null}
+                    <strong>{issue.title}</strong>
+                  </Space>
+                  {issue.evidence ? <div style={{ marginTop: 4, color: '#666' }}>{issue.evidence}</div> : null}
+                </div>
+              ))}
+            </Space>
+          </Card>
+        )}
+
         {workflowResult && (
           <Card size="small" title="最近一次流程结果">
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -533,8 +539,8 @@ function TaskDetail() {
                 <pre>{workflowResult.developer_error || workflowResult.developer_content || '无'}</pre>
               </div>
               <div>
-                <strong>实际实施结果摘要</strong>
-                <pre>{workflowResult.implementation_summary}</pre>
+                <strong>实施摘要</strong>
+                <pre>{workflowResult.implementation_summary || '无'}</pre>
               </div>
               <div>
                 <strong>写回文件</strong>
@@ -573,110 +579,35 @@ function TaskDetail() {
         )}
       </div>
 
-      <div className="page-surface agents-panel">
-        <div className="section-heading">
-          <div>
-            <h3>工作流状态</h3>
-            <p>这里展示自动流程当前记住的轮次、测试结果、发布门禁和阻塞问题。</p>
-          </div>
-        </div>
-        <Descriptions bordered size="small" column={2}>
-          <Descriptions.Item label="状态">{workflowState.status || 'idle'}</Descriptions.Item>
-          <Descriptions.Item label="当前阶段">{workflowState.current_stage || detail.current_stage}</Descriptions.Item>
-          <Descriptions.Item label="发布就绪">{workflowState.release_ready ? '是' : '否'}</Descriptions.Item>
-          <Descriptions.Item label="需要人工介入">{workflowState.requires_human_review ? '是' : '否'}</Descriptions.Item>
-          <Descriptions.Item label="测试命令">{workflowState.last_test_command || '无'}</Descriptions.Item>
-          <Descriptions.Item label="测试退出码">{workflowState.last_test_exit_code}</Descriptions.Item>
-          <Descriptions.Item label="测试代理摘要" span={2}>
-            {workflowState.tester_summary || '无'}
-          </Descriptions.Item>
-          <Descriptions.Item label="最近错误" span={2}>
-            {workflowState.last_error || '无'}
-          </Descriptions.Item>
-          <Descriptions.Item label="建议动作" span={2}>
-            {workflowState.recommended_action || '无'}
-          </Descriptions.Item>
-          <Descriptions.Item label="门禁状态">{workflowState.release_gate_status || 'unknown'}</Descriptions.Item>
-          <Descriptions.Item label="门禁原因">{workflowState.release_gate_reason || '无'}</Descriptions.Item>
-        </Descriptions>
-        <div style={{ marginTop: 12 }}>
-          <strong>发布门禁检查</strong>
-          {workflowState.release_gate_checks.length ? (
-            <ul style={{ marginTop: 8 }}>
-              {workflowState.release_gate_checks.map((check, index) => (
-                <li key={`${check.name}-${index}`}>
-                  {check.name} / passed={String(check.passed)} / {check.detail}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p style={{ marginTop: 8 }}>当前没有门禁检查结果。</p>
-          )}
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <strong>阻塞问题</strong>
-          {workflowState.issues.length ? (
-            <ul style={{ marginTop: 8 }}>
-              {workflowState.issues.map((issue, index) => (
-                <li key={`${issue.title}-${index}`}>
-                  {issue.title} / severity={issue.severity} / blocking={String(issue.blocking)} / category=
-                  {issue.category || 'uncategorized'}
-                  {issue.evidence ? ` / evidence=${issue.evidence}` : ''}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p style={{ marginTop: 8 }}>当前没有记录的结构化问题。</p>
-          )}
-        </div>
-      </div>
-
-      <div className="page-surface agents-panel">
-        <div className="section-heading">
-          <div>
-            <h3>辅助代理分析</h3>
-            <p>这部分保留给手动参考使用，不参与自动串行流程。</p>
-          </div>
-          <Button type="default" icon={<TeamOutlined />} loading={agentsLoading} onClick={handleRunAgents}>
-            运行辅助代理
-          </Button>
-        </div>
-        <Row gutter={[12, 12]}>
-          {roles.map((role) => {
-            const result = agentByRole.get(role);
-            return (
-              <Col xs={24} lg={8} key={role}>
-                <Card
-                  className="agent-card"
-                  title={AGENT_LABELS[role]}
-                  size="small"
-                  extra={
-                    result ? (
-                      <Tag color={result.status === 'completed' ? 'green' : 'red'}>
-                        {AGENT_STATUS_LABELS[result.status] || result.status}
-                      </Tag>
-                    ) : (
-                      <Tag>{AGENT_STATUS_LABELS.pending}</Tag>
-                    )
-                  }
+      <div className="page-surface">
+        <Tabs
+          items={[
+            {
+              key: 'files',
+              label: '任务文件',
+              children: fileTabs.length ? <Tabs items={fileTabs} /> : <p>暂无任务文件。</p>,
+            },
+            {
+              key: 'journal',
+              label: '执行日志',
+              children: (
+                <pre
+                  style={{
+                    whiteSpace: 'pre-wrap',
+                    background: '#f5f5f5',
+                    padding: 16,
+                    borderRadius: 4,
+                    maxHeight: '60vh',
+                    overflow: 'auto',
+                  }}
                 >
-                  <pre>{result?.error || result?.content || '暂无结果'}</pre>
-                </Card>
-              </Col>
-            );
-          })}
-        </Row>
+                  {detail.journal || '暂无日志。'}
+                </pre>
+              ),
+            },
+          ]}
+        />
       </div>
-
-      <div className="page-surface file-panel">
-        <Tabs items={fileTabs} defaultActiveKey={fileTabs[0]?.key} />
-      </div>
-
-      {detail.journal && (
-        <Card title="日志" size="small" style={{ marginTop: 16 }}>
-          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#666' }}>{detail.journal}</pre>
-        </Card>
-      )}
     </div>
   );
 }
