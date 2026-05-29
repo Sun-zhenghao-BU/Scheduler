@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal, Protocol
 
-from scheduler_automation.llm.client import LLMClient
+from scheduler_automation.llm.client import LLMClient, get_llm_profile
 
 AgentRole = Literal["product_manager", "developer", "tester"]
 AgentStatus = Literal["completed", "failed"]
@@ -62,7 +62,7 @@ ROLE_ERROR_LABELS: dict[AgentRole, str] = {
 
 class LLMRoleProvider:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self.client = client or LLMClient()
+        self.client = client
 
     async def run(self, role: AgentRole, task_title: str, task_context: str) -> AgentResult:
         messages = [
@@ -73,7 +73,8 @@ class LLMRoleProvider:
             },
         ]
         try:
-            content = await self.client.chat(messages)
+            client = self.client or LLMClient(get_llm_profile(role))
+            content = await client.chat(messages)
             return AgentResult(role=role, status="completed", content=content or "")
         except Exception as exc:
             error = _normalize_role_error(role, str(exc))

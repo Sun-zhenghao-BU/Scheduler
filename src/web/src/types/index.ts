@@ -76,6 +76,14 @@ export interface TaskDetail extends Task {
 export interface LLMConfig {
   base_url: string;
   model: string;
+  product_manager_model: string;
+  developer_model: string;
+  tester_model: string;
+  codegen_model: string;
+  product_manager_timeout: number;
+  developer_timeout: number;
+  tester_timeout: number;
+  codegen_timeout: number;
   has_api_key: boolean;
 }
 

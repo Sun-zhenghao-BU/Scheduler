@@ -38,9 +38,12 @@ async def run_agent_workflow(
     provider: AgentProvider,
 ) -> list[AgentResult]:
     metadata, task_dir = manager.get_task(task_id)
-    task_context = _task_context(manager, metadata.project_id, task_dir)
 
-    results = await asyncio.gather(*(provider.run(role, metadata.title, task_context) for role in AGENT_ROLES))
+    async def _run(role: AgentRole) -> AgentResult:
+        task_context = _task_context(role, manager, metadata.project_id, task_dir)
+        return await provider.run(role, metadata.title, task_context)
+
+    results = await asyncio.gather(*(_run(role) for role in AGENT_ROLES))
 
     for result in results:
         if result.status == "completed":
@@ -62,7 +65,7 @@ async def run_agent_roles(
     results: list[AgentResult] = []
 
     for role in roles:
-        task_context = _task_context(manager, metadata.project_id, task_dir)
+        task_context = _task_context(role, manager, metadata.project_id, task_dir)
         result = await provider.run(role, metadata.title, task_context)
         if result.status == "completed":
             _write_role_artifact(task_dir, result)
@@ -93,17 +96,34 @@ def _write_role_artifact(task_dir: Path, result: AgentResult) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _task_context(manager: WorkflowManager, project_id: str, task_dir: Path) -> str:
-    parts: list[str] = []
-    for file_name in ("request.md", "spec.md", "implementation.md", "review.md", "fixes.md"):
-        path = task_dir / file_name
-        if path.exists():
-            parts.append(f"## {file_name}\n\n{path.read_text(encoding='utf-8')}")
+def _task_context(role: AgentRole, manager: WorkflowManager, project_id: str, task_dir: Path) -> str:
     workspace = (
         load_workspace(manager.root, project_id)
         if project_id
         else Workspace(Path(os.environ.get("SCHEDULER_PROJECT_ROOT", "/workspace/project")))
     )
-    if workspace is not None and workspace.exists():
-        parts.append(f"## Project workspace summary\n\n{workspace.summary()}")
+    parts: list[str] = []
+
+    if role == "product_manager":
+        _append_files(parts, task_dir, ("request.md", "spec.md"))
+        _append_workspace(parts, workspace, limit=40)
+    elif role == "developer":
+        _append_files(parts, task_dir, ("request.md", "spec.md", "implementation.md"))
+        _append_workspace(parts, workspace, limit=60)
+    else:
+        _append_files(parts, task_dir, ("request.md", "spec.md", "implementation.md", "review.md", "fixes.md"))
+        _append_workspace(parts, workspace, limit=80)
+
     return "\n\n".join(parts)
+
+
+def _append_files(parts: list[str], task_dir: Path, file_names: tuple[str, ...]) -> None:
+    for file_name in file_names:
+        path = task_dir / file_name
+        if path.exists():
+            parts.append(f"## {file_name}\n\n{path.read_text(encoding='utf-8')}")
+
+
+def _append_workspace(parts: list[str], workspace: Workspace | None, *, limit: int) -> None:
+    if workspace is not None and workspace.exists():
+        parts.append(f"## Project workspace summary\n\n{workspace.summary(limit=limit)}")

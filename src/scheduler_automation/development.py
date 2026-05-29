@@ -7,7 +7,7 @@ import shlex
 import subprocess
 from dataclasses import asdict, dataclass
 
-from scheduler_automation.llm.client import LLMClient, get_llm_config
+from scheduler_automation.llm.client import LLMClient, get_llm_profile
 from scheduler_automation.workspace import Workspace
 
 BLOCKED_COMMAND_TOKENS = {"&&", "||", ";", "|", ">", "<", "`", "$(", "&"}
@@ -125,8 +125,8 @@ async def propose_changes(workspace: Workspace, instruction: str, paths: list[st
     for path in paths:
         selected_files.append(_read_file_for_proposal(workspace, path))
 
-    config = get_llm_config()
-    if not config["api_key"]:
+    profile = get_llm_profile("codegen")
+    if not profile["api_key"]:
         raise DevelopmentCommandError("Configure an LLM API key before generating code changes.")
 
     files_text = "\n\n".join(
@@ -146,7 +146,7 @@ async def propose_changes(workspace: Workspace, instruction: str, paths: list[st
             "content": f"Instruction: {instruction}\n\nCurrent files:\n\n{files_text}",
         },
     ]
-    raw = await LLMClient(config).chat(messages)
+    raw = await LLMClient(profile).chat(messages)
     return parse_proposed_changes(workspace, str(raw))
 
 

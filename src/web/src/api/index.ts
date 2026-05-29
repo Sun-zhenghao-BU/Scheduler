@@ -156,8 +156,20 @@ export async function getLLMConfig(): Promise<LLMConfig> {
   return data;
 }
 
-export async function updateLLMConfig(apiKey: string, baseUrl: string, model: string): Promise<void> {
-  await api.post('/llm/config', { api_key: apiKey, base_url: baseUrl, model });
+export async function updateLLMConfig(payload: {
+  api_key?: string;
+  base_url: string;
+  model: string;
+  product_manager_model?: string;
+  developer_model?: string;
+  tester_model?: string;
+  codegen_model?: string;
+  product_manager_timeout?: number;
+  developer_timeout?: number;
+  tester_timeout?: number;
+  codegen_timeout?: number;
+}): Promise<void> {
+  await api.post('/llm/config', payload);
 }
 
 export async function validateLLMConfig(): Promise<{ valid: boolean; message: string }> {
