@@ -32,12 +32,7 @@ import {
   reopenRequirements,
   updateTaskFile,
 } from '../api';
-import type {
-  RequirementSession,
-  Stage,
-  TaskDetail as TaskDetailModel,
-  TaskOrchestrationResult,
-} from '../types';
+import type { RequirementSession, Stage, TaskDetail as TaskDetailModel } from '../types';
 import { STAGE_COLORS, STAGE_LABELS, STAGES } from '../types';
 import { getErrorMessage } from '../utils/error';
 
@@ -62,7 +57,6 @@ function TaskDetail() {
   const [requirements, setRequirements] = useState<RequirementSession | null>(null);
   const [requirementsLoading, setRequirementsLoading] = useState(false);
   const [workflowLoading, setWorkflowLoading] = useState(false);
-  const [workflowResult, setWorkflowResult] = useState<TaskOrchestrationResult | null>(null);
   const [requirementMessage, setRequirementMessage] = useState('');
   const [requirementSummary, setRequirementSummary] = useState('');
   const [editingFile, setEditingFile] = useState<string | null>(null);
@@ -102,10 +96,21 @@ function TaskDetail() {
     };
   }, [fetchRequirements, fetchTask, taskId]);
 
+  useEffect(() => {
+    if (!detail) return;
+    const status = detail.workflow_state.status;
+    if (status !== 'queued' && status !== 'running') return;
+    const timer = window.setInterval(() => {
+      fetchTask().catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [detail, fetchTask]);
+
   const currentStage = detail?.current_stage as Stage | undefined;
   const currentIdx = currentStage ? STAGES.indexOf(currentStage) : -1;
   const nextStage = currentIdx >= 0 && currentIdx < STAGES.length - 1 ? STAGES[currentIdx + 1] : null;
   const requirementsConfirmed = detail?.requirement_status === 'confirmed';
+
   const fileTabs = useMemo(
     () =>
       Object.entries(detail?.files ?? {}).map(([name, content]) => ({
@@ -232,14 +237,7 @@ function TaskDetail() {
     setWorkflowLoading(true);
     try {
       const result = await confirmRequirementsAndStart(taskId, { summary: requirementSummary.trim() });
-      setWorkflowResult(result);
-      message.success(
-        result.release_ready
-          ? '需求已确认，自动流程已完成并达到发布条件'
-          : `需求已确认，自动流程已启动，当前建议动作：${
-              result.workflow_state.recommended_action || result.final_stage
-            }`,
-      );
+      message.success(result.message);
       await Promise.all([fetchTask(), fetchRequirements()]);
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '确认需求并启动流程失败'));
@@ -268,15 +266,10 @@ function TaskDetail() {
     setWorkflowLoading(true);
     try {
       const result = await orchestrateTask(taskId);
-      setWorkflowResult(result);
-      message.success(
-        result.release_ready
-          ? '流程执行完成，已达到发布条件'
-          : `流程执行完成，当前建议动作：${result.workflow_state.recommended_action || result.final_stage}`,
-      );
+      message.success(result.message);
       await fetchTask();
     } catch (error: unknown) {
-      message.error(getErrorMessage(error, '自动流程执行失败'));
+      message.error(getErrorMessage(error, '自动流程启动失败'));
     } finally {
       setWorkflowLoading(false);
     }
@@ -356,7 +349,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>需求确认</h3>
-            <p>先收敛需求，再锁定摘要。摘要确认后，系统会立即进入后续开发测试流程。</p>
+            <p>先收敛需求，再锁定摘要。摘要确认后，系统会在后台启动开发测试流程。</p>
           </div>
           <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
@@ -450,24 +443,25 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>自动流程</h3>
-            <p>这里是主执行链。辅助代理分析已经从主界面移除，不再作为单独入口保留。</p>
+            <p>流程在后台执行。页面会自动轮询状态，不再同步卡住等待。</p>
           </div>
           <Button
             type="primary"
             icon={<PlayCircleOutlined />}
             loading={workflowLoading}
-            disabled={!requirementsConfirmed}
+            disabled={!requirementsConfirmed || workflowState.status === 'queued' || workflowState.status === 'running'}
             onClick={handleStartWorkflow}
           >
             开始自动流程
           </Button>
         </div>
-        {!requirementsConfirmed && (
+        {(workflowState.status === 'queued' || workflowState.status === 'running') && (
           <Alert
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="请先完成需求确认，确认后才能执行完整的产品、开发、测试串行流程。"
+            message="自动流程正在后台执行。"
+            description="页面会每 2 秒刷新一次状态，你可以继续查看日志和生成的文件。"
           />
         )}
         {workflowState.requires_human_review && (
@@ -523,57 +517,6 @@ function TaskDetail() {
                   {issue.evidence ? <div style={{ marginTop: 4, color: '#666' }}>{issue.evidence}</div> : null}
                 </div>
               ))}
-            </Space>
-          </Card>
-        )}
-
-        {workflowResult && (
-          <Card size="small" title="最近一次流程结果">
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              <div>
-                <strong>产品规划输出（spec.md）</strong>
-                <pre>{workflowResult.product_error || workflowResult.product_content || '无'}</pre>
-              </div>
-              <div>
-                <strong>实施方案输出（implementation.md）</strong>
-                <pre>{workflowResult.developer_error || workflowResult.developer_content || '无'}</pre>
-              </div>
-              <div>
-                <strong>实施摘要</strong>
-                <pre>{workflowResult.implementation_summary || '无'}</pre>
-              </div>
-              <div>
-                <strong>写回文件</strong>
-                <pre>{workflowResult.written.join('\n') || '无'}</pre>
-              </div>
-              <div>
-                <strong>测试命令</strong>
-                <pre>{workflowResult.test_command || '无'}</pre>
-              </div>
-              <div>
-                <strong>测试退出码</strong>
-                <pre>{String(workflowResult.test_exit_code)}</pre>
-              </div>
-              <div>
-                <strong>测试输出</strong>
-                <pre>{workflowResult.test_output || '无输出'}</pre>
-              </div>
-              <div>
-                <strong>测试评审输出（review.md）</strong>
-                <pre>{workflowResult.tester_error || workflowResult.tester_content || '无'}</pre>
-              </div>
-              <div>
-                <strong>自动修复轮次</strong>
-                <pre>{String(workflowResult.fix_rounds)}</pre>
-              </div>
-              <div>
-                <strong>方案回流轮次</strong>
-                <pre>{String(workflowResult.spec_rounds)}</pre>
-              </div>
-              <div>
-                <strong>最终阶段</strong>
-                <pre>{STAGE_LABELS[workflowResult.final_stage as Stage] || workflowResult.final_stage}</pre>
-              </div>
             </Space>
           </Card>
         )}

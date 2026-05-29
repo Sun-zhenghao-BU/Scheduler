@@ -9,7 +9,7 @@ import type {
   Task,
   TaskDetail,
   TaskExecutionResult,
-  TaskOrchestrationResult,
+  WorkflowLaunchResult,
   TestCommandResult,
   WorkspaceFile,
   WorkspaceInfo,
@@ -125,8 +125,8 @@ export async function confirmRequirements(taskId: string, summary: string): Prom
 export async function confirmRequirementsAndStart(
   taskId: string,
   payload: { summary: string; instruction?: string; paths?: string[]; test_command?: string; apply_changes?: boolean },
-): Promise<TaskOrchestrationResult> {
-  const { data } = await api.post<TaskOrchestrationResult>(`/tasks/${taskId}/requirements/confirm-and-start`, payload);
+): Promise<WorkflowLaunchResult> {
+  const { data } = await api.post<WorkflowLaunchResult>(`/tasks/${taskId}/requirements/confirm-and-start`, payload);
   return data;
 }
 
@@ -146,8 +146,8 @@ export async function executeTask(
 export async function orchestrateTask(
   taskId: string,
   payload: { instruction?: string; paths?: string[]; test_command?: string; apply_changes?: boolean } = {},
-): Promise<TaskOrchestrationResult> {
-  const { data } = await api.post<TaskOrchestrationResult>(`/tasks/${taskId}/orchestrate`, payload);
+): Promise<WorkflowLaunchResult> {
+  const { data } = await api.post<WorkflowLaunchResult>(`/tasks/${taskId}/orchestrate`, payload);
   return data;
 }
 

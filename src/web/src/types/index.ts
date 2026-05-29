@@ -145,6 +145,13 @@ export interface TaskOrchestrationResult {
   workflow_state: WorkflowState;
 }
 
+export interface WorkflowLaunchResult {
+  task_id: string;
+  started: boolean;
+  message: string;
+  workflow_state: WorkflowState;
+}
+
 export interface RequirementMessage {
   role: 'user' | 'product_manager';
   content: string;

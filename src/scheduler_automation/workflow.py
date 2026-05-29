@@ -257,7 +257,10 @@ class WorkflowManager:
         state.last_test_output = ""
         state.tester_summary = ""
         state.recommended_action = ""
+        state.release_gate_status = "unknown"
+        state.release_gate_reason = ""
         state.issues = []
+        state.release_gate_checks = []
         state.updated_at = confirmed_at
         self.save_workflow_state(task_id, state)
         self.append_log(task_id, metadata.current_stage, "需求已确认")
@@ -290,7 +293,10 @@ class WorkflowManager:
         state.last_test_output = ""
         state.tester_summary = ""
         state.recommended_action = ""
+        state.release_gate_status = "unknown"
+        state.release_gate_reason = ""
         state.issues = []
+        state.release_gate_checks = []
         state.updated_at = metadata.updated_at
         self.save_workflow_state(task_id, state)
 

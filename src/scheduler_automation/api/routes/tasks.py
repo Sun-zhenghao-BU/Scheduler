@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -16,9 +18,10 @@ from scheduler_automation.requirements import (
     generate_requirement_guidance,
     generate_requirement_guidance_with_llm,
 )
-from scheduler_automation.workflow import STAGES, WorkflowManager
+from scheduler_automation.workflow import STAGES, WorkflowManager, utc_timestamp
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+_RUNNING_WORKFLOWS: dict[str, asyncio.Task[Any]] = {}
 
 
 def get_manager() -> WorkflowManager:
@@ -142,6 +145,13 @@ class OrchestrateTaskResponse(BaseModel):
     workflow_state: dict
 
 
+class WorkflowLaunchResponse(BaseModel):
+    task_id: str
+    started: bool
+    message: str
+    workflow_state: dict
+
+
 def _build_orchestration_response(manager: WorkflowManager, task_id: str, result) -> OrchestrateTaskResponse:
     return OrchestrateTaskResponse(
         product_status=result.product_result.status,
@@ -192,6 +202,62 @@ async def _run_orchestration(manager: WorkflowManager, task_id: str, req: Execut
         _proposal,
         _test_runner,
     )
+
+
+def _build_launch_response(
+    manager: WorkflowManager,
+    task_id: str,
+    *,
+    started: bool,
+    message: str,
+) -> WorkflowLaunchResponse:
+    return WorkflowLaunchResponse(
+        task_id=task_id,
+        started=started,
+        message=message,
+        workflow_state=asdict(manager.load_workflow_state(task_id)),
+    )
+
+
+async def _run_orchestration_background(task_id: str, req: ExecuteTaskRequest) -> None:
+    manager = get_manager()
+    try:
+        await _run_orchestration(manager, task_id, req)
+    except Exception as exc:
+        metadata, _ = manager.get_task(task_id)
+        state = manager.load_workflow_state(task_id)
+        state.status = "needs_attention"
+        state.current_stage = metadata.current_stage
+        state.release_ready = False
+        state.requires_human_review = True
+        state.last_error = str(exc)
+        state.release_gate_status = "blocked"
+        state.release_gate_reason = str(exc)
+        state.updated_at = utc_timestamp()
+        manager.save_workflow_state(task_id, state)
+        manager.append_log(task_id, metadata.current_stage, f"自动流程后台执行失败：{exc}")
+    finally:
+        _RUNNING_WORKFLOWS.pop(task_id, None)
+
+
+def _start_orchestration_background(task_id: str, req: ExecuteTaskRequest) -> bool:
+    running = _RUNNING_WORKFLOWS.get(task_id)
+    if running is not None and not running.done():
+        return False
+
+    manager = get_manager()
+    metadata, _ = manager.get_task(task_id)
+    state = manager.load_workflow_state(task_id)
+    state.status = "queued"
+    state.current_stage = metadata.current_stage
+    state.release_ready = False
+    state.requires_human_review = False
+    state.last_error = ""
+    state.updated_at = utc_timestamp()
+    manager.save_workflow_state(task_id, state)
+    manager.append_log(task_id, metadata.current_stage, "自动流程已在后台启动")
+    _RUNNING_WORKFLOWS[task_id] = asyncio.create_task(_run_orchestration_background(task_id, req))
+    return True
 
 
 @router.get("/", response_model=list[TaskResponse])
@@ -331,13 +397,12 @@ def confirm_requirements(task_id: str, req: RequirementConfirmRequest):
     return TaskResponse(**asdict(metadata))
 
 
-@router.post("/{task_id}/requirements/confirm-and-start", response_model=OrchestrateTaskResponse)
+@router.post("/{task_id}/requirements/confirm-and-start", response_model=WorkflowLaunchResponse)
 async def confirm_requirements_and_start(task_id: str, req: ConfirmAndStartRequest):
     manager = get_manager()
     try:
         manager.confirm_requirements(task_id, req.summary)
-        result = await _run_orchestration(
-            manager,
+        started = _start_orchestration_background(
             task_id,
             ExecuteTaskRequest(
                 instruction=req.instruction,
@@ -350,7 +415,12 @@ async def confirm_requirements_and_start(task_id: str, req: ConfirmAndStartReque
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _build_orchestration_response(manager, task_id, result)
+    return _build_launch_response(
+        manager,
+        task_id,
+        started=started,
+        message="需求已确认，自动流程已在后台启动。" if started else "自动流程已在后台运行，请等待当前执行完成。",
+    )
 
 
 @router.post("/{task_id}/requirements/reopen", response_model=TaskResponse)
@@ -459,13 +529,18 @@ async def execute_task_implementation(task_id: str, req: ExecuteTaskRequest):
     )
 
 
-@router.post("/{task_id}/orchestrate", response_model=OrchestrateTaskResponse)
+@router.post("/{task_id}/orchestrate", response_model=WorkflowLaunchResponse)
 async def orchestrate_task(task_id: str, req: ExecuteTaskRequest):
     manager = get_manager()
     try:
-        result = await _run_orchestration(manager, task_id, req)
+        started = _start_orchestration_background(task_id, req)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _build_orchestration_response(manager, task_id, result)
+    return _build_launch_response(
+        manager,
+        task_id,
+        started=started,
+        message="自动流程已在后台启动。" if started else "自动流程已在后台运行，请等待当前执行完成。",
+    )

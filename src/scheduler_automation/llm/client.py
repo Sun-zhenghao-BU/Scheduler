@@ -37,6 +37,7 @@ class LLMClient:
     def __init__(self, config: dict[str, str] | None = None):
         self.config = config or get_llm_config()
         self._client: Any | None = None
+        self._timeout_seconds = 60
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -45,6 +46,7 @@ class LLMClient:
             self._client = AsyncOpenAI(
                 api_key=self.config["api_key"],
                 base_url=self.config["base_url"],
+                timeout=self._timeout_seconds,
             )
         return self._client
 
@@ -55,6 +57,7 @@ class LLMClient:
             messages=messages,
             stream=stream,
             temperature=0.7,
+            timeout=self._timeout_seconds,
         )
         if stream:
             return response
@@ -67,6 +70,7 @@ class LLMClient:
             messages=messages,
             stream=True,
             temperature=0.7,
+            timeout=self._timeout_seconds,
         ):
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
