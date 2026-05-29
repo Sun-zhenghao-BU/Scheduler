@@ -17,6 +17,7 @@ class RequirementGuidance:
 
 
 GuidanceFunc = Callable[[str, RequirementSession], Awaitable[RequirementGuidance]]
+MAX_REQUIREMENT_ROUNDS = 3
 
 
 async def generate_requirement_guidance(
@@ -40,6 +41,42 @@ async def generate_requirement_guidance(
         next_action=guidance.next_action or "ask",
         suggested_summary=guidance.suggested_summary,
     )
+
+
+async def auto_converge_requirements(
+    manager: WorkflowManager,
+    task_id: str,
+    guidance_func: GuidanceFunc,
+    max_rounds: int = MAX_REQUIREMENT_ROUNDS,
+) -> RequirementSession:
+    metadata, _ = manager.get_task(task_id)
+    if metadata.requirement_status == "confirmed":
+        raise ValueError("Requirements are already confirmed.")
+
+    seen_questions: set[str] = set()
+    session = manager.load_requirement_session(task_id)
+    for _ in range(max_rounds):
+        guidance = await guidance_func(metadata.title, session)
+        question = guidance.question.strip()
+        if not question:
+            raise ValueError("Product manager did not return a requirement question.")
+        if question in seen_questions:
+            session = manager.update_requirement_guidance(
+                task_id,
+                next_action=guidance.next_action or "ask",
+                suggested_summary=guidance.suggested_summary,
+            )
+            break
+        seen_questions.add(question)
+        session = manager.append_requirement_message(task_id, "product_manager", question)
+        session = manager.update_requirement_guidance(
+            task_id,
+            next_action=guidance.next_action or "ask",
+            suggested_summary=guidance.suggested_summary,
+        )
+        if session.next_action == "confirm":
+            break
+    return session
 
 
 async def generate_requirement_guidance_with_llm(task_title: str, session: RequirementSession) -> RequirementGuidance:

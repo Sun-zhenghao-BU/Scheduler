@@ -54,6 +54,15 @@ class WorkflowIssue:
     severity: str = "medium"
     blocking: bool = True
     source: str = "tester"
+    category: str = ""
+    evidence: str = ""
+
+
+@dataclass
+class ReleaseGateCheck:
+    name: str
+    passed: bool
+    detail: str
 
 
 @dataclass
@@ -70,8 +79,11 @@ class WorkflowState:
     last_test_output: str = ""
     tester_summary: str = ""
     recommended_action: str = ""
+    release_gate_status: str = "unknown"
+    release_gate_reason: str = ""
     updated_at: str = ""
     issues: list[WorkflowIssue] = field(default_factory=list)
+    release_gate_checks: list[ReleaseGateCheck] = field(default_factory=list)
 
 
 class WorkflowManager:
@@ -319,8 +331,11 @@ class WorkflowManager:
             last_test_output=data.get("last_test_output", ""),
             tester_summary=data.get("tester_summary", ""),
             recommended_action=data.get("recommended_action", ""),
+            release_gate_status=data.get("release_gate_status", "unknown"),
+            release_gate_reason=data.get("release_gate_reason", ""),
             updated_at=data.get("updated_at", ""),
             issues=[WorkflowIssue(**item) for item in data.get("issues", [])],
+            release_gate_checks=[ReleaseGateCheck(**item) for item in data.get("release_gate_checks", [])],
         )
 
     def save_workflow_state(self, task_id: str, state: WorkflowState) -> None:
@@ -332,6 +347,7 @@ class WorkflowManager:
                 {
                     **asdict(state),
                     "issues": [asdict(issue) for issue in state.issues],
+                    "release_gate_checks": [asdict(item) for item in state.release_gate_checks],
                 },
                 indent=2,
                 ensure_ascii=True,

@@ -11,7 +11,11 @@ from scheduler_automation.development import propose_changes, run_test_command
 from scheduler_automation.execution import ExecutionRequest, execute_task
 from scheduler_automation.orchestration import run_task_orchestration
 from scheduler_automation.project_workspace import load_workspace
-from scheduler_automation.requirements import generate_requirement_guidance, generate_requirement_guidance_with_llm
+from scheduler_automation.requirements import (
+    auto_converge_requirements,
+    generate_requirement_guidance,
+    generate_requirement_guidance_with_llm,
+)
 from scheduler_automation.workflow import STAGES, WorkflowManager
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -77,6 +81,14 @@ class RequirementConfirmRequest(BaseModel):
     summary: str
 
 
+class ConfirmAndStartRequest(BaseModel):
+    summary: str
+    instruction: str = ""
+    paths: list[str] = []
+    test_command: str = ""
+    apply_changes: bool = True
+
+
 class RequirementMessageResponse(BaseModel):
     role: str
     content: str
@@ -128,6 +140,58 @@ class OrchestrateTaskResponse(BaseModel):
     fix_rounds: int
     spec_rounds: int
     workflow_state: dict
+
+
+def _build_orchestration_response(manager: WorkflowManager, task_id: str, result) -> OrchestrateTaskResponse:
+    return OrchestrateTaskResponse(
+        product_status=result.product_result.status,
+        product_content=result.product_result.content,
+        product_error=result.product_result.error,
+        developer_status=result.developer_result.status,
+        developer_content=result.developer_result.content,
+        developer_error=result.developer_result.error,
+        implementation_summary=result.execution_result.summary,
+        written=result.execution_result.written,
+        test_command=result.execution_result.test_command,
+        test_exit_code=result.execution_result.test_exit_code,
+        test_output=result.execution_result.test_output,
+        tester_status=result.tester_result.status,
+        tester_content=result.tester_result.content,
+        tester_error=result.tester_result.error,
+        final_stage=result.final_stage,
+        release_ready=result.release_ready,
+        fix_rounds=result.fix_rounds,
+        spec_rounds=result.spec_rounds,
+        workflow_state=asdict(manager.load_workflow_state(task_id)),
+    )
+
+
+async def _run_orchestration(manager: WorkflowManager, task_id: str, req: ExecuteTaskRequest):
+    async def _proposal(instruction: str, paths: list[str], project_id: str):
+        workspace = load_workspace(Path.cwd(), project_id)
+        if workspace is None or not workspace.exists():
+            raise ValueError("Project workspace is not configured or does not exist.")
+        return await propose_changes(workspace, instruction, paths)
+
+    def _test_runner(project_id: str, command: str):
+        workspace = load_workspace(Path.cwd(), project_id)
+        if workspace is None or not workspace.exists():
+            raise ValueError("Project workspace is not configured or does not exist.")
+        return run_test_command(workspace, command)
+
+    return await run_task_orchestration(
+        manager,
+        task_id,
+        LLMRoleProvider(),
+        ExecutionRequest(
+            instruction=req.instruction,
+            paths=req.paths,
+            test_command=req.test_command,
+            apply_changes=req.apply_changes,
+        ),
+        _proposal,
+        _test_runner,
+    )
 
 
 @router.get("/", response_model=list[TaskResponse])
@@ -237,6 +301,24 @@ async def add_product_manager_question(task_id: str):
     )
 
 
+@router.post("/{task_id}/requirements/auto-refine", response_model=RequirementSessionResponse)
+async def auto_refine_requirements(task_id: str):
+    manager = get_manager()
+    try:
+        session = await auto_converge_requirements(manager, task_id, generate_requirement_guidance_with_llm)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return RequirementSessionResponse(
+        status=session.status,
+        summary=session.summary,
+        next_action=session.next_action,
+        suggested_summary=session.suggested_summary,
+        messages=[RequirementMessageResponse(**asdict(message)) for message in session.messages],
+    )
+
+
 @router.post("/{task_id}/requirements/confirm", response_model=TaskResponse)
 def confirm_requirements(task_id: str, req: RequirementConfirmRequest):
     manager = get_manager()
@@ -247,6 +329,28 @@ def confirm_requirements(task_id: str, req: RequirementConfirmRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return TaskResponse(**asdict(metadata))
+
+
+@router.post("/{task_id}/requirements/confirm-and-start", response_model=OrchestrateTaskResponse)
+async def confirm_requirements_and_start(task_id: str, req: ConfirmAndStartRequest):
+    manager = get_manager()
+    try:
+        manager.confirm_requirements(task_id, req.summary)
+        result = await _run_orchestration(
+            manager,
+            task_id,
+            ExecuteTaskRequest(
+                instruction=req.instruction,
+                paths=req.paths,
+                test_command=req.test_command,
+                apply_changes=req.apply_changes,
+            ),
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _build_orchestration_response(manager, task_id, result)
 
 
 @router.post("/{task_id}/requirements/reopen", response_model=TaskResponse)
@@ -358,56 +462,10 @@ async def execute_task_implementation(task_id: str, req: ExecuteTaskRequest):
 @router.post("/{task_id}/orchestrate", response_model=OrchestrateTaskResponse)
 async def orchestrate_task(task_id: str, req: ExecuteTaskRequest):
     manager = get_manager()
-
-    async def _proposal(instruction: str, paths: list[str], project_id: str):
-        workspace = load_workspace(Path.cwd(), project_id)
-        if workspace is None or not workspace.exists():
-            raise ValueError("Project workspace is not configured or does not exist.")
-        return await propose_changes(workspace, instruction, paths)
-
-    def _test_runner(project_id: str, command: str):
-        workspace = load_workspace(Path.cwd(), project_id)
-        if workspace is None or not workspace.exists():
-            raise ValueError("Project workspace is not configured or does not exist.")
-        return run_test_command(workspace, command)
-
     try:
-        result = await run_task_orchestration(
-            manager,
-            task_id,
-            LLMRoleProvider(),
-            ExecutionRequest(
-                instruction=req.instruction,
-                paths=req.paths,
-                test_command=req.test_command,
-                apply_changes=req.apply_changes,
-            ),
-            _proposal,
-            _test_runner,
-        )
+        result = await _run_orchestration(manager, task_id, req)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    return OrchestrateTaskResponse(
-        product_status=result.product_result.status,
-        product_content=result.product_result.content,
-        product_error=result.product_result.error,
-        developer_status=result.developer_result.status,
-        developer_content=result.developer_result.content,
-        developer_error=result.developer_result.error,
-        implementation_summary=result.execution_result.summary,
-        written=result.execution_result.written,
-        test_command=result.execution_result.test_command,
-        test_exit_code=result.execution_result.test_exit_code,
-        test_output=result.execution_result.test_output,
-        tester_status=result.tester_result.status,
-        tester_content=result.tester_result.content,
-        tester_error=result.tester_result.error,
-        final_stage=result.final_stage,
-        release_ready=result.release_ready,
-        fix_rounds=result.fix_rounds,
-        spec_rounds=result.spec_rounds,
-        workflow_state=asdict(manager.load_workflow_state(task_id)),
-    )
+    return _build_orchestration_response(manager, task_id, result)

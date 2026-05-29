@@ -35,6 +35,14 @@ export interface WorkflowIssue {
   severity: string;
   blocking: boolean;
   source: string;
+  category: string;
+  evidence: string;
+}
+
+export interface ReleaseGateCheck {
+  name: string;
+  passed: boolean;
+  detail: string;
 }
 
 export interface WorkflowState {
@@ -50,8 +58,11 @@ export interface WorkflowState {
   last_test_output: string;
   tester_summary: string;
   recommended_action: string;
+  release_gate_status: string;
+  release_gate_reason: string;
   updated_at: string;
   issues: WorkflowIssue[];
+  release_gate_checks: ReleaseGateCheck[];
 }
 
 export interface TaskDetail extends Task {

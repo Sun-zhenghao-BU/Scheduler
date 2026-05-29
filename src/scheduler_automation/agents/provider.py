@@ -46,9 +46,10 @@ ROLE_PROMPTS: dict[AgentRole, str] = {
     "tester": (
         "你是资深测试工程师。先输出一个 JSON 对象，再补充简短中文说明。"
         'JSON 格式固定为：{"summary":"...","blocking":true,"severity":"low|medium|high",'
-        '"recommended_action":"release|fix|spec","issues":[{"title":"...","severity":"low|medium|high","blocking":true}]}. '
+        '"recommended_action":"release|fix|spec","issues":[{"title":"...","severity":"low|medium|high","blocking":true,'
+        '"category":"functionality|regression|requirements|test_env","evidence":"..."}]}. '
         "issues 可以为空数组。blocking 表示是否阻塞发布。recommended_action 表示建议流转方向。"
-        "JSON 后面可以补充少量中文评审说明，供写入 review.md。"
+        "如果存在高风险问题，请明确写进 issues。JSON 后面可以补充少量中文评审说明，供写入 review.md。"
     ),
 }
 

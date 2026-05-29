@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from scheduler_automation.agents.provider import AgentProvider, AgentResult
 from scheduler_automation.agents.service import run_agent_roles
 from scheduler_automation.execution import ExecutionRequest, ExecutionResult, execute_task
-from scheduler_automation.workflow import WorkflowIssue, WorkflowManager, utc_timestamp
+from scheduler_automation.workflow import ReleaseGateCheck, WorkflowIssue, WorkflowManager, utc_timestamp
 
 MAX_FIX_ROUNDS = 2
 MAX_SPEC_ROUNDS = 1
@@ -20,6 +20,14 @@ class TesterDecision:
     severity: str
     recommended_action: str
     issues: list[WorkflowIssue]
+
+
+@dataclass
+class ReleaseGateDecision:
+    ready: bool
+    status: str
+    reason: str
+    checks: list[ReleaseGateCheck]
 
 
 @dataclass
@@ -54,6 +62,9 @@ async def run_task_orchestration(
     state.release_ready = False
     state.requires_human_review = False
     state.last_error = ""
+    state.release_gate_status = "running"
+    state.release_gate_reason = ""
+    state.release_gate_checks = []
     state.updated_at = utc_timestamp()
     state.issues = []
     manager.save_workflow_state(task_id, state)
@@ -110,7 +121,8 @@ async def run_task_orchestration(
 
         break
 
-    release_ready = execution_result.test_exit_code == 0 and not tester_decision.blocking and tester_decision.recommended_action == "release"
+    gate = _evaluate_release_gate(execution_result, tester_decision)
+    release_ready = gate.ready
     final_stage = "release" if release_ready else ("spec" if tester_decision.recommended_action == "spec" else "fix")
     manager.advance_task(task_id, final_stage)
 
@@ -125,6 +137,9 @@ async def run_task_orchestration(
         or (tester_decision.recommended_action == "fix" and fix_rounds >= MAX_FIX_ROUNDS)
         or tester_decision.recommended_action not in {"release", "fix", "spec"}
     )
+    state.release_gate_status = gate.status
+    state.release_gate_reason = gate.reason
+    state.release_gate_checks = gate.checks
     state.updated_at = utc_timestamp()
     manager.save_workflow_state(task_id, state)
 
@@ -136,7 +151,7 @@ async def run_task_orchestration(
             execution_result.test_output,
         )
     else:
-        manager.append_log(task_id, final_stage, f"自动流程停在 {final_stage}，建议动作：{tester_decision.recommended_action}")
+        manager.append_log(task_id, final_stage, f"自动流程停在 {final_stage}，门禁原因：{gate.reason}")
 
     manager.append_log(
         task_id,
@@ -251,6 +266,8 @@ def _parse_tester_decision(result: AgentResult, execution_result: ExecutionResul
                     severity=str(item.get("severity", "medium")),
                     blocking=bool(item.get("blocking", True)),
                     source="tester",
+                    category=str(item.get("category", "")),
+                    evidence=str(item.get("evidence", "")),
                 )
             )
         return TesterDecision(
@@ -268,10 +285,56 @@ def _parse_tester_decision(result: AgentResult, execution_result: ExecutionResul
         severity="high" if fallback_blocking else "low",
         recommended_action="fix" if fallback_blocking else "release",
         issues=(
-            [WorkflowIssue(title="测试命令失败", severity="high", blocking=True, source="tester")]
+            [WorkflowIssue(title="测试命令失败", severity="high", blocking=True, source="tester", category="test_env")]
             if fallback_blocking
             else []
         ),
+    )
+
+
+def _evaluate_release_gate(execution_result: ExecutionResult, tester_decision: TesterDecision) -> ReleaseGateDecision:
+    blocking_issues = [issue for issue in tester_decision.issues if issue.blocking]
+    high_severity_issues = [issue for issue in tester_decision.issues if issue.severity.lower() == "high"]
+    checks = [
+        ReleaseGateCheck(
+            name="tests_passed",
+            passed=execution_result.test_exit_code == 0,
+            detail="测试退出码必须为 0。",
+        ),
+        ReleaseGateCheck(
+            name="tester_not_blocking",
+            passed=not tester_decision.blocking,
+            detail="测试代理不能给出阻塞发布结论。",
+        ),
+        ReleaseGateCheck(
+            name="recommended_release",
+            passed=tester_decision.recommended_action == "release",
+            detail="测试代理建议动作必须是 release。",
+        ),
+        ReleaseGateCheck(
+            name="no_blocking_issues",
+            passed=not blocking_issues,
+            detail="不能存在 blocking=true 的问题项。",
+        ),
+        ReleaseGateCheck(
+            name="no_high_severity_issues",
+            passed=not high_severity_issues,
+            detail="不能存在 high 严重级别问题项。",
+        ),
+    ]
+    failed = [check for check in checks if not check.passed]
+    if not failed:
+        return ReleaseGateDecision(
+            ready=True,
+            status="passed",
+            reason="所有发布门禁均已通过。",
+            checks=checks,
+        )
+    return ReleaseGateDecision(
+        ready=False,
+        status="blocked",
+        reason="；".join(check.detail for check in failed),
+        checks=checks,
     )
 
 
@@ -283,6 +346,7 @@ def _update_state_from_decision(
     round_number: int,
 ) -> None:
     state = manager.load_workflow_state(task_id)
+    gate = _evaluate_release_gate(execution_result, tester_decision)
     state.current_round = round_number
     state.current_stage = "review"
     state.last_test_exit_code = execution_result.test_exit_code
@@ -290,7 +354,10 @@ def _update_state_from_decision(
     state.last_test_output = execution_result.test_output
     state.tester_summary = tester_decision.summary
     state.recommended_action = tester_decision.recommended_action
-    state.release_ready = execution_result.test_exit_code == 0 and not tester_decision.blocking
+    state.release_ready = gate.ready
+    state.release_gate_status = gate.status
+    state.release_gate_reason = gate.reason
+    state.release_gate_checks = gate.checks
     state.last_error = execution_result.test_output if execution_result.test_exit_code != 0 else ""
     state.issues = tester_decision.issues
     state.updated_at = utc_timestamp()

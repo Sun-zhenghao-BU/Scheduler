@@ -27,7 +27,8 @@ import {
 import {
   addRequirementMessage,
   advanceTask,
-  confirmRequirements,
+  autoRefineRequirements,
+  confirmRequirementsAndStart,
   generateRequirementQuestion,
   getAgentResults,
   getRequirements,
@@ -237,10 +238,29 @@ function TaskDetail() {
         setRequirementSummary(updated.suggested_summary);
       }
       message.success(
-        updated.next_action === 'confirm' ? '产品经理判断信息已足够，可确认摘要' : '产品经理已给出下一步问题',
+        updated.next_action === 'confirm' ? '产品经理判断信息已足够，可以确认摘要' : '产品经理已给出下一步问题',
       );
     } catch (error: unknown) {
       message.error(getErrorMessage(error, '生成产品经理问题失败'));
+    } finally {
+      setRequirementsLoading(false);
+    }
+  }
+
+  async function handleAutoRefineRequirements() {
+    if (!taskId) return;
+    setRequirementsLoading(true);
+    try {
+      const updated = await autoRefineRequirements(taskId);
+      setRequirements(updated);
+      if (!updated.summary && updated.suggested_summary) {
+        setRequirementSummary(updated.suggested_summary);
+      }
+      message.success(
+        updated.next_action === 'confirm' ? '需求已自动收敛到可确认状态' : '已完成一轮自动收敛，请继续补充需求',
+      );
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '自动收敛需求失败'));
     } finally {
       setRequirementsLoading(false);
     }
@@ -252,14 +272,21 @@ function TaskDetail() {
       return;
     }
     setRequirementsLoading(true);
+    setWorkflowLoading(true);
     try {
-      await confirmRequirements(taskId, requirementSummary.trim());
-      message.success('需求已确认');
-      await Promise.all([fetchTask(), fetchRequirements()]);
+      const result = await confirmRequirementsAndStart(taskId, { summary: requirementSummary.trim() });
+      setWorkflowResult(result);
+      message.success(
+        result.release_ready
+          ? '需求已确认，自动流程已完成并达到发布条件'
+          : `需求已确认，自动流程已启动，当前建议动作：${result.workflow_state.recommended_action || result.final_stage}`,
+      );
+      await Promise.all([fetchTask(), fetchRequirements(), fetchAgents()]);
     } catch (error: unknown) {
-      message.error(getErrorMessage(error, '需求确认失败'));
+      message.error(getErrorMessage(error, '需求确认并启动自动流程失败'));
     } finally {
       setRequirementsLoading(false);
+      setWorkflowLoading(false);
     }
   }
 
@@ -382,7 +409,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>需求确认</h3>
-            <p>先由产品经理判断下一步是继续追问还是可以确认，再把需求摘要锁定。</p>
+            <p>先由产品经理判断下一步是继续追问还是可以确认。确认摘要后，系统会立即自动进入后续开发测试流程。</p>
           </div>
           <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
@@ -421,6 +448,9 @@ function TaskDetail() {
           <>
             <div className="requirement-inputs">
               <Space>
+                <Button loading={requirementsLoading} onClick={handleAutoRefineRequirements}>
+                  自动收敛需求
+                </Button>
                 <Button loading={requirementsLoading} onClick={handleAskProductManager}>
                   产品经理判断下一步
                 </Button>
@@ -455,7 +485,7 @@ function TaskDetail() {
           {!requirementsConfirmed && (
             <Space style={{ marginTop: 8 }}>
               <Button type="primary" icon={<CheckCircleOutlined />} loading={requirementsLoading} onClick={handleConfirmRequirements}>
-                确认需求
+                确认需求并启动流程
               </Button>
             </Space>
           )}
@@ -547,7 +577,7 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>工作流状态</h3>
-            <p>这里展示自动流程当前记住的轮次、测试结果、阻塞问题和建议动作。</p>
+            <p>这里展示自动流程当前记住的轮次、测试结果、发布门禁和阻塞问题。</p>
           </div>
         </div>
         <Descriptions bordered size="small" column={2}>
@@ -566,14 +596,32 @@ function TaskDetail() {
           <Descriptions.Item label="建议动作" span={2}>
             {workflowState.recommended_action || '无'}
           </Descriptions.Item>
+          <Descriptions.Item label="门禁状态">{workflowState.release_gate_status || 'unknown'}</Descriptions.Item>
+          <Descriptions.Item label="门禁原因">{workflowState.release_gate_reason || '无'}</Descriptions.Item>
         </Descriptions>
+        <div style={{ marginTop: 12 }}>
+          <strong>发布门禁检查</strong>
+          {workflowState.release_gate_checks.length ? (
+            <ul style={{ marginTop: 8 }}>
+              {workflowState.release_gate_checks.map((check, index) => (
+                <li key={`${check.name}-${index}`}>
+                  {check.name} / passed={String(check.passed)} / {check.detail}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p style={{ marginTop: 8 }}>当前没有门禁检查结果。</p>
+          )}
+        </div>
         <div style={{ marginTop: 12 }}>
           <strong>阻塞问题</strong>
           {workflowState.issues.length ? (
             <ul style={{ marginTop: 8 }}>
               {workflowState.issues.map((issue, index) => (
                 <li key={`${issue.title}-${index}`}>
-                  {issue.title} / severity={issue.severity} / blocking={String(issue.blocking)}
+                  {issue.title} / severity={issue.severity} / blocking={String(issue.blocking)} / category=
+                  {issue.category || 'uncategorized'}
+                  {issue.evidence ? ` / evidence=${issue.evidence}` : ''}
                 </li>
               ))}
             </ul>

@@ -123,8 +123,21 @@ export async function generateRequirementQuestion(taskId: string): Promise<Requi
   return data;
 }
 
+export async function autoRefineRequirements(taskId: string): Promise<RequirementSession> {
+  const { data } = await api.post<RequirementSession>(`/tasks/${taskId}/requirements/auto-refine`);
+  return data;
+}
+
 export async function confirmRequirements(taskId: string, summary: string): Promise<Task> {
   const { data } = await api.post<Task>(`/tasks/${taskId}/requirements/confirm`, { summary });
+  return data;
+}
+
+export async function confirmRequirementsAndStart(
+  taskId: string,
+  payload: { summary: string; instruction?: string; paths?: string[]; test_command?: string; apply_changes?: boolean },
+): Promise<TaskOrchestrationResult> {
+  const { data } = await api.post<TaskOrchestrationResult>(`/tasks/${taskId}/requirements/confirm-and-start`, payload);
   return data;
 }
 

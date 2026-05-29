@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scheduler_automation.requirements import RequirementGuidance, generate_requirement_guidance
+from scheduler_automation.requirements import RequirementGuidance, auto_converge_requirements, generate_requirement_guidance
 from scheduler_automation.workflow import WorkflowManager
 
 
@@ -60,6 +60,33 @@ class RequirementQuestionTests(unittest.IsolatedAsyncioTestCase):
 
             with self.assertRaisesRegex(ValueError, "already confirmed"):
                 await generate_requirement_guidance(manager, task.task_id, ask)
+
+    async def test_auto_converge_requirements_stops_when_ready_to_confirm(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = WorkflowManager(Path(temp_dir))
+            task = manager.create_task("Build chat flow", "Need a chat workflow")
+            calls = {"count": 0}
+
+            async def ask(_title: str, _session):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    return RequirementGuidance(
+                        question="需要支持哪些失败场景？",
+                        next_action="ask",
+                        suggested_summary="",
+                    )
+                return RequirementGuidance(
+                    question="需求信息已经足够，请确认摘要。",
+                    next_action="confirm",
+                    suggested_summary="先完成需求确认，再自动进入开发测试流程。",
+                )
+
+            session = await auto_converge_requirements(manager, task.task_id, ask)
+
+            self.assertEqual(calls["count"], 2)
+            self.assertEqual(session.next_action, "confirm")
+            self.assertIn("自动进入开发测试流程", session.suggested_summary)
+            self.assertEqual(session.messages[-1].content, "需求信息已经足够，请确认摘要。")
 
 
 if __name__ == "__main__":

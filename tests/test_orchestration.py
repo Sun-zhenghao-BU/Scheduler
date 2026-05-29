@@ -246,6 +246,59 @@ class OrchestrationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("方案回流 Round 1", (task_dir / "spec.md").read_text(encoding="utf-8"))
             self.assertIn("修订后的产品方案", (task_dir / "spec.md").read_text(encoding="utf-8"))
 
+    async def test_orchestration_blocks_release_when_high_severity_issue_remains(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project_root = root / "project"
+            project_root.mkdir()
+            project = ProjectManager(root).create_project("Demo", str(project_root))
+            manager = WorkflowManager(root)
+            task = manager.create_task("Build login", "Add login", project.project_id)
+            manager.confirm_requirements(task.task_id, "Build a minimal login flow.")
+
+            provider = SequencedProvider(
+                {
+                    "product_manager": [AgentResult("product_manager", "completed", "# 产品规划\n\n详细产品方案")],
+                    "developer": [AgentResult("developer", "completed", "# 实施方案\n\n详细实施方案")],
+                    "tester": [
+                        AgentResult(
+                            "tester",
+                            "completed",
+                            '{"summary":"存在高风险问题，不能发布","blocking":false,"severity":"high","recommended_action":"release","issues":[{"title":"缺少回归覆盖","severity":"high","blocking":false,"category":"regression","evidence":"登录成功路径有测试，失败路径没有覆盖"}]}',
+                        )
+                    ],
+                }
+            )
+
+            async def propose(_instruction: str, _paths: list[str], _project_id: str):
+                return (
+                    "Implemented login flow",
+                    [
+                        FileChange("pyproject.toml", "", "[project]\nname='demo'\n", ""),
+                        FileChange("src/app.py", "", "def login() -> str:\n    return 'ok'\n", ""),
+                        FileChange("tests/test_app.py", "", "def test_login() -> None:\n    assert True\n", ""),
+                    ],
+                )
+
+            def run_test(_project_id: str, command: str) -> TestRunResult:
+                return TestRunResult(command=command, exit_code=0, output="1 passed")
+
+            result = await run_task_orchestration(
+                manager,
+                task.task_id,
+                provider,
+                ExecutionRequest(),
+                propose,
+                run_test,
+            )
+
+            state = manager.load_workflow_state(task.task_id)
+            self.assertFalse(result.release_ready)
+            self.assertEqual(result.final_stage, "fix")
+            self.assertEqual(state.release_gate_status, "blocked")
+            self.assertIn("high 严重级别问题项", state.release_gate_reason)
+            self.assertEqual(state.issues[0].category, "regression")
+
 
 if __name__ == "__main__":
     unittest.main()

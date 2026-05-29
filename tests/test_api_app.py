@@ -20,6 +20,8 @@ class ApiAppTests(unittest.TestCase):
         self.assertIn("/api/tasks/{task_id}/agents", paths)
         self.assertIn("/api/tasks/{task_id}/agents/run", paths)
         self.assertIn("/api/tasks/{task_id}/requirements/next-question", paths)
+        self.assertIn("/api/tasks/{task_id}/requirements/auto-refine", paths)
+        self.assertIn("/api/tasks/{task_id}/requirements/confirm-and-start", paths)
         self.assertIn("/api/tasks/{task_id}/requirements/reopen", paths)
         self.assertIn("/api/tasks/{task_id}/execute", paths)
         self.assertIn("/api/tasks/{task_id}/orchestrate", paths)
