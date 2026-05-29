@@ -47,10 +47,16 @@ ROLE_PROMPTS: dict[AgentRole, str] = {
         "你是资深测试工程师。先输出一个 JSON 对象，再补充简短中文说明。"
         'JSON 格式固定为：{"summary":"...","blocking":true,"severity":"low|medium|high",'
         '"recommended_action":"release|fix|spec","issues":[{"title":"...","severity":"low|medium|high","blocking":true,'
-        '"category":"functionality|regression|requirements|test_env","evidence":"..."}]}. '
+        '"category":"functionality|regression|requirements|test_env","evidence":"..."}]}。'
         "issues 可以为空数组。blocking 表示是否阻塞发布。recommended_action 表示建议流转方向。"
         "如果存在高风险问题，请明确写进 issues。JSON 后面可以补充少量中文评审说明，供写入 review.md。"
     ),
+}
+
+ROLE_ERROR_LABELS: dict[AgentRole, str] = {
+    "product_manager": "产品规划",
+    "developer": "实施方案",
+    "tester": "测试评审",
 }
 
 
@@ -70,4 +76,13 @@ class LLMRoleProvider:
             content = await self.client.chat(messages)
             return AgentResult(role=role, status="completed", content=content or "")
         except Exception as exc:
-            return AgentResult(role=role, status="failed", content="", error=str(exc))
+            error = _normalize_role_error(role, str(exc))
+            return AgentResult(role=role, status="failed", content="", error=error)
+
+
+def _normalize_role_error(role: AgentRole, error: str) -> str:
+    label = ROLE_ERROR_LABELS[role]
+    normalized = error.strip() or f"{label}生成失败。"
+    if "Request timed out" in normalized or "timed out" in normalized.lower():
+        return f"{label}生成超时。请检查模型响应速度，或提高超时配置后重试。"
+    return normalized

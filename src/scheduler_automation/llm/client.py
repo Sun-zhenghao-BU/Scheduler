@@ -37,7 +37,7 @@ class LLMClient:
     def __init__(self, config: dict[str, str] | None = None):
         self.config = config or get_llm_config()
         self._client: Any | None = None
-        self._timeout_seconds = 60
+        self._timeout_seconds = 180
 
     def _get_client(self) -> Any:
         if self._client is None:

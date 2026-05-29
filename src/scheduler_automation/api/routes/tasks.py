@@ -227,7 +227,9 @@ async def _run_orchestration_background(task_id: str, req: ExecuteTaskRequest) -
         metadata, _ = manager.get_task(task_id)
         state = manager.load_workflow_state(task_id)
         state.status = "needs_attention"
-        state.current_stage = metadata.current_stage
+        state.current_stage = state.current_stage or metadata.current_stage
+        state.active_step = "failed"
+        state.step_message = f"自动流程失败：{exc}"
         state.release_ready = False
         state.requires_human_review = True
         state.last_error = str(exc)
