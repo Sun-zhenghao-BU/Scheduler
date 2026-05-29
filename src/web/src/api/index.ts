@@ -118,6 +118,11 @@ export async function addRequirementMessage(
   return data;
 }
 
+export async function generateRequirementQuestion(taskId: string): Promise<RequirementSession> {
+  const { data } = await api.post<RequirementSession>(`/tasks/${taskId}/requirements/next-question`);
+  return data;
+}
+
 export async function confirmRequirements(taskId: string, summary: string): Promise<Task> {
   const { data } = await api.post<Task>(`/tasks/${taskId}/requirements/confirm`, { summary });
   return data;

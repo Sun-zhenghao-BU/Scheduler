@@ -8,7 +8,6 @@ CONFIG_PATH = Path.home() / ".scheduler" / "llm_config.json"
 
 
 def get_llm_config() -> dict[str, str]:
-    """Load LLM config from user config file."""
     if CONFIG_PATH.exists():
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         return {
@@ -35,8 +34,6 @@ def save_llm_config(api_key: str, base_url: str, model: str) -> None:
 
 
 class LLMClient:
-    """Unified LLM client using openai-compatible API."""
-
     def __init__(self, config: dict[str, str] | None = None):
         self.config = config or get_llm_config()
         self._client: Any | None = None
@@ -44,6 +41,7 @@ class LLMClient:
     def _get_client(self) -> Any:
         if self._client is None:
             from openai import AsyncOpenAI
+
             self._client = AsyncOpenAI(
                 api_key=self.config["api_key"],
                 base_url=self.config["base_url"],
@@ -51,7 +49,6 @@ class LLMClient:
         return self._client
 
     async def chat(self, messages: list[dict[str, str]], stream: bool = False):
-        """Send chat messages and return response."""
         client = self._get_client()
         response = await client.chat.completions.create(
             model=self.config["model"],
@@ -60,11 +57,10 @@ class LLMClient:
             temperature=0.7,
         )
         if stream:
-            return response  # async generator
+            return response
         return response.choices[0].message.content
 
     async def chat_stream(self, messages: list[dict[str, str]]):
-        """Stream chat responses."""
         client = self._get_client()
         async for chunk in await client.chat.completions.create(
             model=self.config["model"],

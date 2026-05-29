@@ -11,6 +11,7 @@ from scheduler_automation.development import propose_changes, run_test_command
 from scheduler_automation.execution import ExecutionRequest, execute_task
 from scheduler_automation.orchestration import run_task_orchestration
 from scheduler_automation.project_workspace import load_workspace
+from scheduler_automation.requirements import generate_requirement_question, generate_requirement_question_with_llm
 from scheduler_automation.workflow import STAGES, WorkflowManager
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -201,6 +202,22 @@ def add_requirement_message(task_id: str, req: RequirementMessageRequest):
     manager = get_manager()
     try:
         session = manager.append_requirement_message(task_id, req.role, req.content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return RequirementSessionResponse(
+        status=session.status,
+        summary=session.summary,
+        messages=[RequirementMessageResponse(**asdict(message)) for message in session.messages],
+    )
+
+
+@router.post("/{task_id}/requirements/next-question", response_model=RequirementSessionResponse)
+async def add_product_manager_question(task_id: str):
+    manager = get_manager()
+    try:
+        session = await generate_requirement_question(manager, task_id, generate_requirement_question_with_llm)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     except ValueError as exc:

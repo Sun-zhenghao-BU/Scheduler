@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from scheduler_automation.llm.client import LLMClient, get_llm_config, save_llm_config
@@ -44,7 +44,6 @@ async def validate_config():
     if not ok:
         return {"valid": False, "message": msg}
 
-    # Try a minimal request to verify connectivity
     try:
         messages = [
             {"role": "system", "content": "Reply with just 'OK'."},
@@ -52,5 +51,5 @@ async def validate_config():
         ]
         await client.chat(messages)
         return {"valid": True, "message": "连接测试成功"}
-    except Exception as e:
-        return {"valid": False, "message": str(e)}
+    except Exception as exc:
+        return {"valid": False, "message": str(exc)}

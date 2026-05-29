@@ -28,6 +28,7 @@ import {
   addRequirementMessage,
   advanceTask,
   confirmRequirements,
+  generateRequirementQuestion,
   getAgentResults,
   getRequirements,
   getTask,
@@ -239,6 +240,22 @@ function TaskDetail() {
     }
   }
 
+  async function handleAskProductManager() {
+    if (!taskId) {
+      return;
+    }
+    setRequirementsLoading(true);
+    try {
+      const updated = await generateRequirementQuestion(taskId);
+      setRequirements(updated);
+      message.success('产品经理已给出下一步问题');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '生成产品经理问题失败'));
+    } finally {
+      setRequirementsLoading(false);
+    }
+  }
+
   async function handleConfirmRequirements() {
     if (!taskId || !requirementSummary.trim()) {
       message.warning('请填写确认后的需求摘要');
@@ -383,12 +400,12 @@ function TaskDetail() {
         <div className="section-heading">
           <div>
             <h3>需求确认</h3>
-            <p>先把需求摘要锁定，后续产品规划、实施方案、测试评审和修复回环都会以这份确认内容为准。</p>
+            <p>先让产品经理追问关键问题，再把需求摘要锁定。后续产品规划、实施方案、测试评审和修复回环都会以这份确认内容为准。</p>
           </div>
           <Tag color={requirementsConfirmed ? 'green' : 'orange'}>{requirementsConfirmed ? '已锁定' : '开放中'}</Tag>
         </div>
         {!requirementsConfirmed && (
-          <Alert type="warning" showIcon message="当前任务还不能进入自动流程，请先确认需求。" style={{ marginBottom: 12 }} />
+          <Alert type="warning" showIcon message="当前任务还不能进入自动流程，请先完成需求确认。" style={{ marginBottom: 12 }} />
         )}
         <div className="requirement-thread">
           {requirements?.messages.length ? (
@@ -405,19 +422,28 @@ function TaskDetail() {
           )}
         </div>
         {!requirementsConfirmed && (
-          <div className="requirement-inputs">
-            <TextArea
-              value={requirementMessage}
-              onChange={(event) => setRequirementMessage(event.target.value)}
-              rows={3}
-              placeholder="补充边界条件、验收标准或额外上下文。"
-            />
-            <Space style={{ marginTop: 8 }}>
-              <Button icon={<SendOutlined />} loading={requirementsLoading} onClick={handleAddRequirementMessage}>
-                记录补充
-              </Button>
-            </Space>
-          </div>
+          <>
+            <div className="requirement-inputs">
+              <Space>
+                <Button loading={requirementsLoading} onClick={handleAskProductManager}>
+                  产品经理提问
+                </Button>
+              </Space>
+            </div>
+            <div className="requirement-inputs">
+              <TextArea
+                value={requirementMessage}
+                onChange={(event) => setRequirementMessage(event.target.value)}
+                rows={3}
+                placeholder="回答产品经理的问题，或者补充边界条件、验收标准、上下文。"
+              />
+              <Space style={{ marginTop: 8 }}>
+                <Button icon={<SendOutlined />} loading={requirementsLoading} onClick={handleAddRequirementMessage}>
+                  记录补充
+                </Button>
+              </Space>
+            </div>
+          </>
         )}
         <div className="requirement-inputs">
           <TextArea
@@ -425,7 +451,7 @@ function TaskDetail() {
             onChange={(event) => setRequirementSummary(event.target.value)}
             rows={5}
             disabled={requirementsConfirmed}
-            placeholder="填写最终确认的需求摘要。"
+            placeholder="当信息足够后，在这里填写最终确认的需求摘要。"
           />
           {!requirementsConfirmed && (
             <Space style={{ marginTop: 8 }}>
@@ -463,7 +489,7 @@ function TaskDetail() {
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="请先确认需求摘要，确认后才能执行完整的产品、开发、测试串行流程。"
+            message="请先完成需求确认，确认后才能执行完整的产品、开发、测试串行流程。"
           />
         )}
         {workflowState.requires_human_review && (
